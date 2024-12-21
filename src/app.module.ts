@@ -1,6 +1,9 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { SongController } from './app.controller';
+import { AppService } from './app.service';
+import { Song, Word, UniqueWord, GroupOfWords, Expression } from './entities';
 // import { UserModule } from './user/user.module'; // Example module
 
 @Module({
@@ -11,7 +14,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({
-        type: 'mysql',
+        type: 'postgres',
         host: configService.get<string>('DB_HOST'),
         port: configService.get<number>('DB_PORT'),
         username: configService.get<string>('DB_USERNAME'),
@@ -22,7 +25,10 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
       }),
       inject: [ConfigService],
     }),
+    TypeOrmModule.forFeature([Song, Word, UniqueWord, GroupOfWords, Expression]),
     // UserModule, // Import your feature modules here
   ],
+  controllers: [SongController],
+  providers: [AppService],
 })
 export class AppModule {}
