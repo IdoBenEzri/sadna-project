@@ -23,30 +23,69 @@ export class AppService {
     private readonly expressionRepository: Repository<Expression>,
   ) {}
 
-  async uploadSong(file: any): Promise<string> {
-    const song = this.songRepository.create({ filename: file.filename });
+  async uploadSong({filename, data, name, authors, composers, singers}: any): Promise<string> {
+    // Create and save the song first
+    const song = this.songRepository.create({ filename });
+    song.name = name;
+    song.author = authors;
+    song.composers = composers.split(',');
+    song.singers = singers.split(',');
+    
     const savedSong = await this.songRepository.save(song);
+    
+    // Decode base64 data
+    const decodedData = Buffer.from(data, 'base64').toString('utf-8');
+    
+    // Split content into lines and words
+    const lines = decodedData.split('\n');
+    
+    // Process each line
+    for (let paragraphIndex = 0; paragraphIndex < lines.length; paragraphIndex++) {
+      const line = lines[paragraphIndex];
+      const words = line.trim().split(/\s+/);
+      
+      // Skip empty lines but maintain paragraph indexing
+      if (words.length === 1 && words[0] === '') continue;
+      
+      // Process each word in the line
+      for (let inRowIndex = 0; inRowIndex < words.length; inRowIndex++) {
+        const wordText = words[inRowIndex];
+        if (!wordText) continue; // Skip empty words
+        
+        // Create word entity
+        const word = this.wordRepository.create({
+          text: wordText,
+          song: savedSong,
+          rowIndex: paragraphIndex,
+          paragraphIndex: paragraphIndex,
+          inRowIndex: inRowIndex,
+        });
+        
+        // Save word
+        await this.wordRepository.save(word);
+        
+        // Check if unique word exists
+        let uniqueWord = await this.uniqueWordRepository.findOne({
+          where: { text: wordText, song: { id: savedSong.id } },
+          relations: ['song'],
+        });
+        
+        // Create unique word if it doesn't exist
+        if (!uniqueWord) {
+          uniqueWord = this.uniqueWordRepository.create({
+            text: wordText,
+            song: savedSong,
+          });
+          await this.uniqueWordRepository.save(uniqueWord);
+        }
+        
+        // Associate word with unique word
+        word.uniqueWord = uniqueWord;
+        await this.wordRepository.save(word);
+      }
+    }
+    
     return savedSong.id;
-  }
-
-  async addExtraDetails(details: {
-    songId: string;
-    name: string;
-    authors: string;
-    composers: string;
-    singers: string;
-  }): Promise<void> {
-    const song = await this.songRepository.findOne({
-      where: { id: details.songId },
-    });
-    if (!song) throw new Error('Song not found');
-
-    song.name = details.name;
-    song.author = details.authors;
-    song.composers = details.composers.split(',');
-    song.singers = details.singers.split(',');
-
-    await this.songRepository.save(song);
   }
 
   async getWords(query: {

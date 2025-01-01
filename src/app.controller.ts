@@ -6,24 +6,13 @@ export class SongController {
   constructor(private readonly AppService: AppService) {}
 
   @Post('upload')
-  async uploadSong(@Body('file') file: any): Promise<{ songId: string }> {
-    const songId = await this.AppService.uploadSong(file);
+  async uploadSong(@Body() body: { filename: string , fileData: string, name: string;
+    authors: string;
+    composers: string;
+    singers: string; }): Promise<{ songId: string }> {
+    console.log(body);
+    const songId = await this.AppService.uploadSong(body);
     return { songId };
-  }
-
-  @Post('extra-details')
-  async addExtraDetails(
-    @Body()
-    details: {
-      songId: string;
-      name: string;
-      authors: string;
-      composers: string;
-      singers: string;
-    },
-  ) {
-    await this.AppService.addExtraDetails(details);
-    return { message: 'Extra details added successfully' };
   }
 
   @Get('words')
