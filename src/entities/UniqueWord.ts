@@ -1,6 +1,6 @@
 import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
 
-@Entity()
+@Entity('uniqueword')
 export class UniqueWord {
   @PrimaryGeneratedColumn()
   id: string;
@@ -8,6 +8,6 @@ export class UniqueWord {
   @Column()
   text: string;
 
-  @Column()
+  @Column({ name: 'songid' })
   songId: string;
 }

@@ -5,10 +5,10 @@ export class GroupOfWords {
   @PrimaryGeneratedColumn()
   id: string;
 
-  @Column()
+  @Column({ name: 'groupid' })
   groupId: string;
 
-  @Column()
+  @Column({ name: 'songid' })
   uniqueWordId: string;
 
   @Column()

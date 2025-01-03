@@ -5,21 +5,21 @@ export class Word {
   @PrimaryGeneratedColumn()
   id: string;
 
-  @Column()
+  @Column({ name: 'songid' })
   songId: string;
 
-  @Column()
+  @Column({ name: 'rowindex' })
   rowIndex: number;
 
-  @Column()
+  @Column({ name: 'paragraphindex' })
   paragraphIndex: number;
 
-  @Column()
+  @Column({ name: 'inrowindex' })
   inRowIndex: number;
 
-  @Column()
+  @Column({ name: 'text' })
   text: string;
 
-  @Column()
+  @Column({ name: 'uniquewordid' })
   uniqueWordId: string;
 }

@@ -33,12 +33,15 @@ export class AppService {
 
     const fileContent = file.buffer.toString('utf-8');
     const fileName = file.originalname;
-    let song = await this.songRepository.findOne({ where: { name: fileName } });
+    let song = await this.songRepository.findOne({
+      where: { filename: fileName },
+    });
 
     if (song) {
       this.logger.error('Song already exists');
-      return;
+      throw new Error('Song already exists');
     }
+
     song = this.songRepository.create({
       filename: fileName,
     });

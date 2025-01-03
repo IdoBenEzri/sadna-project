@@ -7,6 +7,6 @@ export class Expression {
 
   @Column()
   text: string;
-
+  @Column({ name: 'songid' })
   uniqueWordId: string;
 }
