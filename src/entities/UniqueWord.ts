@@ -3,22 +3,17 @@ import {
   PrimaryGeneratedColumn,
   Column,
   OneToMany,
-  ManyToOne,
 } from 'typeorm';
 import { Word } from './Word';
 import { GroupOfWords } from './GroupOfWords';
-import { Song } from './Song';
 
 @Entity()
 export class UniqueWord {
   @PrimaryGeneratedColumn()
   id: string;
 
-  @Column()
+  @Column({ unique: true })
   text: string;
-
-  @ManyToOne(() => Song, (song) => song.uniqueWords)
-  song: Song;
 
   @OneToMany(() => Word, (word) => word.uniqueWord)
   words: Word[];

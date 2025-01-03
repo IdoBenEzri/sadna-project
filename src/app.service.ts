@@ -27,7 +27,7 @@ export class AppService {
     // Create and save the song first
     const song = this.songRepository.create({ filename });
     song.name = name;
-    song.author = authors;
+    song.authors = authors.split(',');
     song.composers = composers.split(',');
     song.singers = singers.split(',');
     
@@ -61,20 +61,15 @@ export class AppService {
           inRowIndex: inRowIndex,
         });
         
-        // Save word
-        await this.wordRepository.save(word);
-        
-        // Check if unique word exists
+        // Check if unique word exists by text only
         let uniqueWord = await this.uniqueWordRepository.findOne({
-          where: { text: wordText, song: { id: savedSong.id } },
-          relations: ['song'],
+          where: { text: wordText }
         });
         
         // Create unique word if it doesn't exist
         if (!uniqueWord) {
           uniqueWord = this.uniqueWordRepository.create({
-            text: wordText,
-            song: savedSong,
+            text: wordText
           });
           await this.uniqueWordRepository.save(uniqueWord);
         }
@@ -112,6 +107,65 @@ export class AppService {
       });
 
     return qb.getMany();
+  }
+
+  async getSongs(query: { words?: string, composers?: string, singers?: string, authors?: string, name?: string }): Promise<any[]> {
+    const qb = this.songRepository.createQueryBuilder('song');
+    
+    // Always join with words to include them in the result
+    qb.leftJoin('song.words', 'word')
+      .addSelect(['word.text', 'word.rowIndex', 'word.paragraphIndex', 'word.inRowIndex'])
+      .orderBy('word.paragraphIndex', 'ASC')
+      .addOrderBy('word.rowIndex', 'ASC')
+      .addOrderBy('word.inRowIndex', 'ASC');
+    
+    // Add filtering conditions
+    if (query.words) {
+      qb.andWhere('word.text IN (:...words)', {
+        words: query.words.split('.'),
+      });
+    }
+    
+    if (query.composers)
+      qb.andWhere('song.composers IN (:...composers)', {
+        composers: query.composers.split('.'),
+      }); 
+    if (query.singers)
+      qb.andWhere('song.singers IN (:...singers)', {
+        singers: query.singers.split('.'),
+      }); 
+    if (query.authors)
+      qb.andWhere('song.authors IN (:...authors)', {
+        authors: query.authors.split('.'),
+      }); 
+    if (query.name)
+      qb.andWhere('song.name IN (:...name)', {
+        name: query.name.split('.'),
+      }); 
+
+    // Add distinct to avoid duplicate songs
+    qb.distinct(true);
+    
+    const songs = await qb.getMany();
+    
+    // Transform the results to include text organized by paragraphs
+    return songs.map(song => {
+      const paragraphs = {};
+      song.words.forEach(word => {
+        if (!paragraphs[word.paragraphIndex]) {
+          paragraphs[word.paragraphIndex] = [];
+        }
+        paragraphs[word.paragraphIndex].push(word.text);
+      });
+
+      console.log(paragraphs);
+      
+      return {
+        ...song,
+        text: Object.values(paragraphs).map((paragraph: string[]) => paragraph.join(' '))
+          ?.join('\n\n')
+      };
+    });
   }
 
   async getWordContext(word: string): Promise<any[]> {

@@ -15,6 +15,12 @@ export class SongController {
     return { songId };
   }
 
+  @Get('songs')
+  async getSongs( @Query() query: { words?: string, composers?: string, singers?: string, authors?: string, name?: string }): Promise<any[]> {
+    return this.AppService.getSongs(query);
+    
+  }
+
   @Get('words')
   async getWords(
     @Query()
