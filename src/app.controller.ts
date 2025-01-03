@@ -1,12 +1,23 @@
-import { Controller, Post, Get, Body, Query } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Get,
+  Body,
+  Query,
+  UploadedFile,
+  UseInterceptors,
+} from '@nestjs/common';
 import { AppService } from './app.service';
+import { FileInterceptor } from '@nestjs/platform-express';
 
 @Controller('song')
 export class SongController {
   constructor(private readonly AppService: AppService) {}
 
   @Post('upload')
-  async uploadSong(@Body('file') file: any): Promise<{ songId: string }> {
+  @UseInterceptors(FileInterceptor('file')) // 'file' is the name of the form-data field
+  async handleFileUpload(@UploadedFile() file: any) {
+    console.log(file);
     const songId = await this.AppService.uploadSong(file);
     return { songId };
   }

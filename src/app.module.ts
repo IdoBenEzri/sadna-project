@@ -21,11 +21,17 @@ import { Song, Word, UniqueWord, GroupOfWords, Expression } from './entities';
         password: configService.get<string>('DB_PASSWORD'),
         database: configService.get<string>('DB_NAME'),
         autoLoadEntities: true, // Automatically load entities
-        synchronize: true, // Use this ONLY in development
+        synchronize: false,
       }),
       inject: [ConfigService],
     }),
-    TypeOrmModule.forFeature([Song, Word, UniqueWord, GroupOfWords, Expression]),
+    TypeOrmModule.forFeature([
+      Song,
+      Word,
+      UniqueWord,
+      GroupOfWords,
+      Expression,
+    ]),
     // UserModule, // Import your feature modules here
   ],
   controllers: [SongController],

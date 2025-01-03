@@ -1,5 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne } from 'typeorm';
-import { UniqueWord } from './UniqueWord';
+import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
 
 @Entity()
 export class GroupOfWords {
@@ -9,8 +8,8 @@ export class GroupOfWords {
   @Column()
   groupId: string;
 
-  @ManyToOne(() => UniqueWord, (uniqueWord) => uniqueWord.groupAssociations)
-  uniqueWord: UniqueWord;
+  @Column()
+  uniqueWordId: string;
 
   @Column()
   name: string;

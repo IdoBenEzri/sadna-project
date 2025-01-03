@@ -1,5 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne } from 'typeorm';
-import { UniqueWord } from './UniqueWord';
+import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
 
 @Entity()
 export class Expression {
@@ -9,6 +8,5 @@ export class Expression {
   @Column()
   text: string;
 
-  @ManyToOne(() => UniqueWord, (uniqueWord) => uniqueWord.id)
-  uniqueWord: UniqueWord;
+  uniqueWordId: string;
 }

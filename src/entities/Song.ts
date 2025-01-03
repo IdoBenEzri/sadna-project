@@ -1,7 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, OneToMany } from 'typeorm';
-import { Word } from './Word';
-import { UniqueWord } from './UniqueWord';
-
+import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
 @Entity()
 export class Song {
   @PrimaryGeneratedColumn()
@@ -21,10 +18,4 @@ export class Song {
 
   @Column('simple-array')
   singers: string[]; // Stores as a comma-separated string
-
-  @OneToMany(() => Word, (word) => word.song)
-  words: Word[];
-
-  @OneToMany(() => UniqueWord, (uniqueWord) => uniqueWord.song)
-  uniqueWords: UniqueWord[];
 }
