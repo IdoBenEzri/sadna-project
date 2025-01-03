@@ -56,8 +56,8 @@ export class SongController {
   }
 
   @Post('group-of-words')
-  async createGroupOfWords(@Body() body: { name: string; words: string[] }) {
-    await this.AppService.createGroupOfWords(body.name, body.words);
+  async createGroupOfWords(@Body() body: { name: string }) {
+    await this.AppService.createGroupOfWords(body.name);
     return { message: 'Group of words created successfully' };
   }
 
