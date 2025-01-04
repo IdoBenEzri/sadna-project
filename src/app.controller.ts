@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Body, Query } from '@nestjs/common';
+import { Controller, Post, Get, Body, Query, Param, HttpException, HttpStatus } from '@nestjs/common';
 import { AppService } from './app.service';
 
 @Controller('song')
@@ -76,5 +76,31 @@ export class SongController {
   @Get('statistics/occurences')
   async getWordOccurrences(): Promise<any[]> {
     return this.AppService.getWordOccurrences();
+  }
+
+  @Post('backup')
+  async backupDatabase(@Body() body: { filepath: string }) {
+    try {
+      await this.AppService.backupToXml(body.filepath);
+      return { message: 'Database backup completed successfully' };
+    } catch (error) {
+      throw new HttpException(
+        `Failed to backup database: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR
+      );
+    }
+  }
+
+  @Post('restore')
+  async restoreDatabase(@Body() body: { filepath: string }) {
+    try {
+      await this.AppService.restoreFromXml(body.filepath);
+      return { message: 'Database restored successfully' };
+    } catch (error) {
+      throw new HttpException(
+        `Failed to restore database: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR
+      );
+    }
   }
 }

@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { Repository } from 'typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
+import * as xml2js from 'xml2js';
+import * as fs from 'fs/promises';
 
 import { Song, Word, UniqueWord, GroupOfWords, Expression } from './entities';
 
@@ -278,5 +280,141 @@ export class AppService {
   private getContext(word: Word): string {
     // Fetch a few words before and after the current word in its song.
     return `...`; // Context logic to fetch surrounding words
+  }
+
+  async backupToXml(filepath: string): Promise<void> {
+    // Fetch all data from database
+    const songs = await this.songRepository.find({
+      relations: ['words', 'words.uniqueWord']
+    });
+    const groups = await this.groupOfWordsRepository.find({
+      relations: ['uniqueWord']
+    });
+    const expressions = await this.expressionRepository.find();
+
+    // Create XML structure
+    const backup = {
+      database: {
+        songs: songs.map(song => ({
+          id: song.id,
+          name: song.name,
+          filename: song.filename,
+          authors: song.authors,
+          composers: song.composers,
+          singers: song.singers,
+          words: song.words.map(word => ({
+            id: word.id,
+            text: word.text,
+            rowIndex: word.rowIndex,
+            paragraphIndex: word.paragraphIndex,
+            inRowIndex: word.inRowIndex,
+            uniqueWord: {
+              id: word.uniqueWord.id,
+              text: word.uniqueWord.text
+            }
+          }))
+        })),
+        groups: groups.map(group => ({
+          id: group.groupId,
+          name: group.name,
+          uniqueWord: group.uniqueWord ? {
+            id: group.uniqueWord.id,
+            text: group.uniqueWord.text
+          } : null
+        })),
+        expressions: expressions.map(expr => ({
+          id: expr.id,
+          text: expr.text
+        }))
+      }
+    };
+
+    // Convert to XML and save
+    const builder = new xml2js.Builder();
+    const xml = builder.buildObject(backup);
+    await fs.writeFile(filepath, xml);
+  }
+
+  async restoreFromXml(filepath: string): Promise<void> {
+    // Read and parse XML file
+    const xml = await fs.readFile(filepath, 'utf-8');
+    const parser = new xml2js.Parser({ explicitArray: false });
+    const data = await parser.parseStringPromise(xml);
+
+    // Clear existing data in correct order
+    await this.wordRepository.delete({});
+    await this.groupOfWordsRepository.delete({});
+    await this.expressionRepository.delete({});
+    await this.uniqueWordRepository.delete({});
+    await this.songRepository.delete({});
+
+    // Create a map to track unique words we've already created
+    const uniqueWordsMap = new Map<string, UniqueWord>();
+
+    // Restore data
+    for (const songData of data.database.songs) {
+      const song = this.songRepository.create({
+        id: songData.id,
+        name: songData.name,
+        filename: songData.filename,
+        authors: songData.authors,
+        composers: songData.composers,
+        singers: songData.singers
+      });
+      await this.songRepository.save(song);
+
+      for (const wordData of songData.words) {
+        // Check if we already created this unique word
+        let uniqueWord = uniqueWordsMap.get(wordData.uniqueWord.text);
+
+        if (!uniqueWord) {
+          // Create new unique word
+          uniqueWord = this.uniqueWordRepository.create({
+            id: wordData.uniqueWord.id,
+            text: wordData.uniqueWord.text
+          });
+          await this.uniqueWordRepository.save(uniqueWord);
+          uniqueWordsMap.set(wordData.uniqueWord.text, uniqueWord);
+        }
+
+        // Create word
+        const word = this.wordRepository.create({
+          id: wordData.id,
+          text: wordData.text,
+          rowIndex: wordData.rowIndex,
+          paragraphIndex: wordData.paragraphIndex,
+          inRowIndex: wordData.inRowIndex,
+          song: song,
+          uniqueWord: uniqueWord
+        });
+        await this.wordRepository.save(word);
+      }
+    }
+
+    // Restore groups
+    if (data.database.groups) {
+      for (const groupData of data.database.groups) {
+        const uniqueWord = groupData.uniqueWord ? 
+          uniqueWordsMap.get(groupData.uniqueWord.text) : null;
+
+        const group = this.groupOfWordsRepository.create({
+          groupId: groupData.id,
+          name: groupData.name,
+          uniqueWord: uniqueWord
+        });
+        await this.groupOfWordsRepository.save(group);
+      }
+    }
+
+    // Restore expressions
+    if (data.database.expressions) {
+      for (const exprData of data.database.expressions) {
+        const expression = this.expressionRepository.create({
+          id: exprData.id,
+          text: exprData.text
+        });
+        await this.expressionRepository.save(expression);
+      }
+    }
   }
 }
