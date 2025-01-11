@@ -71,7 +71,7 @@ export class SongController {
   }
 
   @Get('statistics/occurences')
-  async getWordOccurrences(): Promise<any[]> {
+  async getWordOccurrences(): Promise<{words: string[], occurrences: number[]}> {
     return this.AppService.getWordOccurrences();
   }
 

@@ -358,30 +358,69 @@ export class AppService {
   }
 
   async getStatistics(): Promise<any> {
-    const words = await this.wordRepository.find();
+    const words = await this.wordRepository.find({
+      relations: ['song']
+    });
 
     const totalWords = words.length;
     const totalChars = words.reduce((sum, word) => sum + word.text.length, 0);
 
     const totalRows = new Set(words.map((word) => word.rowIndex)).size;
-    const totalParagraphs = new Set(words.map((word) => word.paragraphIndex))
-      .size;
+    const totalParagraphs = new Set(words.map((word) => word.paragraphIndex)).size;
+
+    // Calculate per-song statistics
+    const songStats = words.reduce((acc, word) => {
+      const songId = word.song.id;
+      if (!acc[songId]) {
+        acc[songId] = {
+          chars: 0,
+          words: 0,
+          rows: new Set()
+        };
+      }
+      acc[songId].chars += word.text.length;
+      acc[songId].words += 1;
+      acc[songId].rows.add(word.rowIndex);
+      return acc;
+    }, {} as Record<string, { chars: number; words: number; rows: Set<number> }>);
+
+    // Calculate averages per song
+    const songsCount = Object.keys(songStats).length;
+    const avgCharsPerSong = Math.round(Object.values(songStats).reduce((sum, stat) => sum + stat.chars, 0) / songsCount);
+    const avgWordsPerSong = Math.round(Object.values(songStats).reduce((sum, stat) => sum + stat.words, 0) / songsCount);
+    const avgWordsPerRow = Math.round(totalWords / totalRows);
 
     return {
-      averageCharsPerWord: totalChars / totalWords,
-      averageCharsPerRow: totalChars / totalRows,
-      averageCharsPerParagraph: totalChars / totalParagraphs,
-      averageWordsPerParagraph: totalWords / totalParagraphs,
+      averageCharsPerWord: Math.round(totalChars / totalWords),
+      averageCharsPerRow: Math.round(totalChars / totalRows),
+      averageCharsPerParagraph: Math.round(totalChars / totalParagraphs),
+      averageWordsPerParagraph: Math.round(totalWords / totalParagraphs),
+      averageCharsPerSong: avgCharsPerSong,
+      averageWordsPerSong: avgWordsPerSong,
+      averageWordsPerRow: avgWordsPerRow,
     };
   }
 
-  async getWordOccurrences(): Promise<any[]> {
-    const songs = await this.songRepository.find({ relations: ['words'] });
-    return songs.map((song) => ({
-      songId: song.id,
-      songName: song.name,
-      occurrencesNum: song.words.length,
-    }));
+  async getWordOccurrences(): Promise<{words: string[], occurrences: number[]}> {
+    // Get all words with their text
+    const words = await this.wordRepository.find({
+      select: ['text']
+    });
+
+    // Count occurrences of each word
+    const wordFrequency = words.reduce((acc, {text}) => {
+      acc[text] = (acc[text] || 0) + 1;
+      return acc;
+    }, {} as Record<string, number>);
+
+    // Split into two arrays
+    const words_array = Object.keys(wordFrequency);
+    const occurrences_array = Object.values(wordFrequency);
+
+    return {
+      words: words_array,
+      occurrences: occurrences_array
+    };
   }
 
   private getContext(word: Word): string {
