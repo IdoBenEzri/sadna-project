@@ -1,5 +1,6 @@
-import { Controller, Post, Get, Body, Query, Param, HttpException, HttpStatus } from '@nestjs/common';
+import { Controller, Post, Get, Body, Query, Param, HttpException, HttpStatus, Header } from '@nestjs/common';
 import { AppService } from './app.service';
+import * as fs from 'fs';
 
 @Controller('song')
 export class SongController {
@@ -100,4 +101,28 @@ export class SongController {
       );
     }
   }
+
+  @Get('export-xml')
+  @Header('Content-Type', 'application/xml')
+  @Header('Content-Disposition', 'attachment; filename="backup.xml"')
+  async exportXml() {
+    const xmlContent = await this.AppService.exportToXml();
+    return xmlContent;
+  }
+
+  @Post('import-xml')
+  async importXml(@Body('xml') xml: string) {
+    await this.AppService.importFromXml(xml);
+    return { message: 'Import completed successfully' };
+  }
+
+  @Post('import-xml-file')
+  async importXmlFile() {
+    const xmlContent = fs.readFileSync('backup.xml', 'utf-8');
+    await this.AppService.importFromXml(xmlContent);
+    return { message: 'Import from file completed successfully' };
+  }
 }
+
+
+

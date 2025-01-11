@@ -3,6 +3,7 @@ import { Repository } from 'typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
 import * as xml2js from 'xml2js';
 import * as fs from 'fs/promises';
+import { XMLParser, XMLBuilder } from 'fast-xml-parser';
 
 import { Song, Word, UniqueWord, GroupOfWords, Expression } from './entities';
 
@@ -28,58 +29,60 @@ export class AppService {
   async uploadSongs({fileNames, data}: any): Promise<string[]> {
     const savedSongIds = [];
     
-    // Process each song
     for (let i = 0; i < fileNames.length; i++) {
       const filename = fileNames[i];
       const songData = data[i]; 
       
-      // Create and save the song first
       const song = this.songRepository.create({ filename });      
-      // Decode base64 data
       const decodedData = Buffer.from(songData, 'base64').toString('utf-8');
-      console.log(decodedData);
-      // Split content into lines
       const lines = decodedData.split('\n');
-      const name = lines[0];
-      const authors = lines[1];
-      const composers = lines[2];
-      const singers = lines[3];
       
-      // Update song metadata
-      song.name = name;
-      song.authors = authors.split(',').map(a => a.trim());
-      song.composers = composers.split(',').map(c => c.trim());
-      song.singers = singers.split(',').map(s => s.trim());
+      // Handle metadata
+      song.name = lines[0];
+      song.authors = lines[1].split(',').map(a => a.trim());
+      song.composers = lines[2].split(',').map(c => c.trim());
+      song.singers = lines[3].split(',').map(s => s.trim());
       const savedSong = await this.songRepository.save(song);
       
+      let currentParagraphIndex = 1;
+      let emptyLineCount = 0;
+      
       // Process each line starting from line 4 (after metadata)
-      for (let paragraphIndex = 4; paragraphIndex < lines.length; paragraphIndex++) {
-        const line = lines[paragraphIndex];
-        const words = line.trim().split(/\s+/);
+      for (let rowIndex = 4; rowIndex < lines.length; rowIndex++) {
+        const line = lines[rowIndex].trim();
         
-        // Skip empty lines but maintain paragraph indexing
-        if (words.length === 1 && words[0] === '') continue;
+        if (!line) {
+          emptyLineCount++;
+          if (emptyLineCount === 2) {
+            currentParagraphIndex++;
+            emptyLineCount = 0;
+          }
+          continue;
+        }
+        emptyLineCount = 0;
         
-        // Process each word in the line
+        // Split by spaces and filter out commas and periods
+        const words = line
+          .replace(/[,.]/g, '') // Remove commas and periods
+          .split(/\s+/)
+          .filter(word => word.length > 0); // Remove empty strings
+        
         for (let inRowIndex = 0; inRowIndex < words.length; inRowIndex++) {
           const wordText = words[inRowIndex];
-          if (!wordText) continue; // Skip empty words
+          if (!wordText) continue;
           
-          // Create word entity
           const word = this.wordRepository.create({
-            text: wordText.trim().toLowerCase(), // Normalize words to lowercase
+            text: wordText.trim().toLowerCase(),
             song: savedSong,
-            rowIndex: paragraphIndex,
-            paragraphIndex: paragraphIndex,
-            inRowIndex: inRowIndex,
+            rowIndex: rowIndex - 3,
+            paragraphIndex: currentParagraphIndex,
+            inRowIndex: inRowIndex + 1,
           });
           
-          // Check if unique word exists by text only
           let uniqueWord = await this.uniqueWordRepository.findOne({
             where: { text: wordText.trim().toLowerCase() }
           });
           
-          // Create unique word if it doesn't exist
           if (!uniqueWord) {
             uniqueWord = this.uniqueWordRepository.create({
               text: wordText.trim().toLowerCase()
@@ -87,7 +90,6 @@ export class AppService {
             await this.uniqueWordRepository.save(uniqueWord);
           }
           
-          // Associate word with unique word
           word.uniqueWord = uniqueWord;
           await this.wordRepository.save(word);
         }
@@ -365,25 +367,30 @@ export class AppService {
     const totalWords = words.length;
     const totalChars = words.reduce((sum, word) => sum + word.text.length, 0);
 
-    const totalRows = new Set(words.map((word) => word.rowIndex)).size;
-    const totalParagraphs = new Set(words.map((word) => word.paragraphIndex)).size;
-
-    // Calculate per-song statistics
+    // Calculate per-song statistics including paragraphs and rows
     const songStats = words.reduce((acc, word) => {
       const songId = word.song.id;
       if (!acc[songId]) {
         acc[songId] = {
           chars: 0,
           words: 0,
-          rows: new Set()
+          rows: new Set(),
+          paragraphs: new Set()
         };
       }
       acc[songId].chars += word.text.length;
       acc[songId].words += 1;
       acc[songId].rows.add(word.rowIndex);
+      acc[songId].paragraphs.add(word.paragraphIndex);
       return acc;
-    }, {} as Record<string, { chars: number; words: number; rows: Set<number> }>);
+    }, {} as Record<string, { chars: number; words: number; rows: Set<number>; paragraphs: Set<number> }>);
 
+    // Sum up total rows and paragraphs across all songs
+    const totalRows = Object.values(songStats)
+      .reduce((sum, stat) => sum + stat.rows.size, 0);
+    const totalParagraphs = Object.values(songStats)
+      .reduce((sum, stat) => sum + stat.paragraphs.size, 0);
+    
     // Calculate averages per song
     const songsCount = Object.keys(songStats).length;
     const avgCharsPerSong = Math.round(Object.values(songStats).reduce((sum, stat) => sum + stat.chars, 0) / songsCount);
@@ -561,6 +568,66 @@ export class AppService {
         });
         await this.expressionRepository.save(expression);
       }
+    }
+  }
+
+  async exportToXml(): Promise<string> {
+    const words = await this.wordRepository.find();
+    const groups = await this.groupOfWordsRepository.find();
+    const songs = await this.songRepository.find();
+
+    const data = {
+      backup: {
+        words: { word: words },
+        groups: { group: groups },
+        songs: { song: songs },
+      },
+    };
+
+    const builder = new XMLBuilder({
+      format: true,
+      ignoreAttributes: false,
+    });
+    const xmlContent = builder.build(data);
+    
+    return xmlContent;
+  }
+
+  async importFromXml(xmlContent: string): Promise<void> {
+    const parser = new XMLParser({
+      ignoreAttributes: false,
+      parseAttributeValue: true,
+    });
+    
+    const parsed = parser.parse(xmlContent);
+    
+    // Clear existing data
+    await this.wordRepository.clear();
+    await this.groupOfWordsRepository.clear();
+    await this.songRepository.clear();
+    
+    // Import words
+    if (parsed.backup.words?.word) {
+      const words = Array.isArray(parsed.backup.words.word) 
+        ? parsed.backup.words.word 
+        : [parsed.backup.words.word];
+      await this.wordRepository.save(words);
+    }
+    
+    // Import groups
+    if (parsed.backup.groups?.group) {
+      const groups = Array.isArray(parsed.backup.groups.group)
+        ? parsed.backup.groups.group
+        : [parsed.backup.groups.group];
+      await this.groupOfWordsRepository.save(groups);
+    }
+    
+    // Import songs
+    if (parsed.backup.songs?.song) {
+      const songs = Array.isArray(parsed.backup.songs.song)
+        ? parsed.backup.songs.song
+        : [parsed.backup.songs.song];
+      await this.songRepository.save(songs);
     }
   }
 }
