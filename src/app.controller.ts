@@ -6,17 +6,14 @@ export class SongController {
   constructor(private readonly AppService: AppService) {}
 
   @Post('upload')
-  async uploadSong(@Body() body: { filename: string , fileData: string, name: string;
-    authors: string;
-    composers: string;
-    singers: string; }): Promise<{ songId: string }> {
+  async uploadSongs(@Body() body: { filenames: string[], data:  string[] }): Promise<{ songIds: string[] }> {
     console.log(body);
-    const songId = await this.AppService.uploadSong(body);
-    return { songId };
+    const songIds = await this.AppService.uploadSongs(body);
+    return { songIds };
   }
 
   @Get('songs')
-  async getSongs( @Query() query: { words?: string, composers?: string, singers?: string, authors?: string, name?: string }): Promise<any[]> {
+  async getSongs( @Query() query: { words?: string, composers?: string, singers?: string, authors?: string, name?: string, songId?: string }): Promise<any[]> {
     return this.AppService.getSongs(query);
     
   }
@@ -25,9 +22,9 @@ export class SongController {
   async getWords(
     @Query()
     query: {
-      rowIndex?: number;
-      inlineIndex?: number;
-      paragraphIndex?: number;
+      rowIndex?: string;
+      inlineIndex?: string;
+      paragraphIndex?: string;
       song_ids?: string;
     },
   ): Promise<any[]> {
@@ -35,8 +32,8 @@ export class SongController {
   }
 
   @Get('word/context')
-  async getWordContext(@Query('word') word: string): Promise<any[]> {
-    return this.AppService.getWordContext(word);
+  async getWordContext(@Query() query: { word: string, songId: string }): Promise<any[]> {
+    return this.AppService.getWordContext(query.word, query.songId);
   }
 
   @Post('group-of-words')

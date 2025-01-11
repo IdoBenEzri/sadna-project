@@ -25,93 +25,126 @@ export class AppService {
     private readonly expressionRepository: Repository<Expression>,
   ) {}
 
-  async uploadSong({filename, data, name, authors, composers, singers}: any): Promise<string> {
-    // Create and save the song first
-    const song = this.songRepository.create({ filename });
-    song.name = name;
-    song.authors = authors.split(',');
-    song.composers = composers.split(',');
-    song.singers = singers.split(',');
+  async uploadSongs({fileNames, data}: any): Promise<string[]> {
+    const savedSongIds = [];
     
-    const savedSong = await this.songRepository.save(song);
-    
-    // Decode base64 data
-    const decodedData = Buffer.from(data, 'base64').toString('utf-8');
-    
-    // Split content into lines and words
-    const lines = decodedData.split('\n');
-    
-    // Process each line
-    for (let paragraphIndex = 0; paragraphIndex < lines.length; paragraphIndex++) {
-      const line = lines[paragraphIndex];
-      const words = line.trim().split(/\s+/);
+    // Process each song
+    for (let i = 0; i < fileNames.length; i++) {
+      const filename = fileNames[i];
+      const songData = data[i]; 
       
-      // Skip empty lines but maintain paragraph indexing
-      if (words.length === 1 && words[0] === '') continue;
+      // Create and save the song first
+      const song = this.songRepository.create({ filename });      
+      // Decode base64 data
+      const decodedData = Buffer.from(songData, 'base64').toString('utf-8');
+      console.log(decodedData);
+      // Split content into lines
+      const lines = decodedData.split('\n');
+      const name = lines[0];
+      const authors = lines[1];
+      const composers = lines[2];
+      const singers = lines[3];
       
-      // Process each word in the line
-      for (let inRowIndex = 0; inRowIndex < words.length; inRowIndex++) {
-        const wordText = words[inRowIndex];
-        if (!wordText) continue; // Skip empty words
+      // Update song metadata
+      song.name = name;
+      song.authors = authors.split(',').map(a => a.trim());
+      song.composers = composers.split(',').map(c => c.trim());
+      song.singers = singers.split(',').map(s => s.trim());
+      const savedSong = await this.songRepository.save(song);
+      
+      // Process each line starting from line 4 (after metadata)
+      for (let paragraphIndex = 4; paragraphIndex < lines.length; paragraphIndex++) {
+        const line = lines[paragraphIndex];
+        const words = line.trim().split(/\s+/);
         
-        // Create word entity
-        const word = this.wordRepository.create({
-          text: wordText,
-          song: savedSong,
-          rowIndex: paragraphIndex,
-          paragraphIndex: paragraphIndex,
-          inRowIndex: inRowIndex,
-        });
+        // Skip empty lines but maintain paragraph indexing
+        if (words.length === 1 && words[0] === '') continue;
         
-        // Check if unique word exists by text only
-        let uniqueWord = await this.uniqueWordRepository.findOne({
-          where: { text: wordText }
-        });
-        
-        // Create unique word if it doesn't exist
-        if (!uniqueWord) {
-          uniqueWord = this.uniqueWordRepository.create({
-            text: wordText
+        // Process each word in the line
+        for (let inRowIndex = 0; inRowIndex < words.length; inRowIndex++) {
+          const wordText = words[inRowIndex];
+          if (!wordText) continue; // Skip empty words
+          
+          // Create word entity
+          const word = this.wordRepository.create({
+            text: wordText.trim().toLowerCase(), // Normalize words to lowercase
+            song: savedSong,
+            rowIndex: paragraphIndex,
+            paragraphIndex: paragraphIndex,
+            inRowIndex: inRowIndex,
           });
-          await this.uniqueWordRepository.save(uniqueWord);
+          
+          // Check if unique word exists by text only
+          let uniqueWord = await this.uniqueWordRepository.findOne({
+            where: { text: wordText.trim().toLowerCase() }
+          });
+          
+          // Create unique word if it doesn't exist
+          if (!uniqueWord) {
+            uniqueWord = this.uniqueWordRepository.create({
+              text: wordText.trim().toLowerCase()
+            });
+            await this.uniqueWordRepository.save(uniqueWord);
+          }
+          
+          // Associate word with unique word
+          word.uniqueWord = uniqueWord;
+          await this.wordRepository.save(word);
         }
-        
-        // Associate word with unique word
-        word.uniqueWord = uniqueWord;
-        await this.wordRepository.save(word);
       }
+      
+      savedSongIds.push(savedSong.id);
     }
     
-    return savedSong.id;
+    return savedSongIds;
   }
 
   async getWords(query: {
-    rowIndex?: number;
-    inlineIndex?: number;
-    paragraphIndex?: number;
+    rowIndex?: string;
+    inlineIndex?: string;
+    paragraphIndex?: string;
     song_ids?: string;
   }): Promise<any[]> {
-    const qb = this.wordRepository.createQueryBuilder('word');
+    const qb = this.wordRepository.createQueryBuilder('word')
+      .leftJoinAndSelect('word.song', 'song')
+      .addSelect(['song.id', 'song.name']);
 
-    if (query.rowIndex !== undefined)
-      qb.andWhere('word.rowIndex = :rowIndex', { rowIndex: query.rowIndex });
-    if (query.inlineIndex !== undefined)
-      qb.andWhere('word.inRowIndex = :inlineIndex', {
-        inlineIndex: query.inlineIndex,
-      });
-    if (query.paragraphIndex !== undefined)
-      qb.andWhere('word.paragraphIndex = :paragraphIndex', {
-        paragraphIndex: query.paragraphIndex,
-      });
-    if (query.song_ids)
-      qb.andWhere('word.songId IN (:...song_ids)', {
-        song_ids: query.song_ids.split('.'),
-      });
+    // Add conditions only if the values are defined and valid
+    if (query.rowIndex) {
+      const rowIndex = parseInt(query.rowIndex, 10);
+      if (!isNaN(rowIndex)) {
+        qb.andWhere('word.rowIndex = :rowIndex', { rowIndex });
+      }
+    }
+
+    if (query.inlineIndex) {
+      const inlineIndex = parseInt(query.inlineIndex, 10);
+      if (!isNaN(inlineIndex)) {
+        qb.andWhere('word.inRowIndex = :inlineIndex', { inlineIndex });
+      }
+    }
+
+    if (query.paragraphIndex) {
+      const paragraphIndex = parseInt(query.paragraphIndex, 10);
+      if (!isNaN(paragraphIndex)) {
+        qb.andWhere('word.paragraphIndex = :paragraphIndex', { paragraphIndex });
+      }
+    }
+
+    if (query.song_ids) {
+      const songIds = typeof query.song_ids === 'string'
+        ? query.song_ids.split(',').filter(id => id && id !== 'undefined')
+        : [];
+
+      if (songIds.length > 0) {
+        qb.andWhere('song.id IN (:...song_ids)', { song_ids: songIds });
+      }
+    }
 
     return qb.getMany();
   }
 
-  async getSongs(query: { words?: string, composers?: string, singers?: string, authors?: string, name?: string }): Promise<any[]> {
+  async getSongs(query: { words?: string, composers?: string, singers?: string, authors?: string, name?: string, songId?: string }): Promise<any[]> {
     const qb = this.songRepository.createQueryBuilder('song');
     
     // Always join with words to include them in the result
@@ -144,6 +177,10 @@ export class AppService {
       qb.andWhere('song.name IN (:...name)', {
         name: query.name.split('.'),
       }); 
+    if (query.songId)
+      qb.andWhere('song.id = :songId', {
+        songId: query.songId,
+      }); 
 
     // Add distinct to avoid duplicate songs
     qb.distinct(true);
@@ -170,18 +207,88 @@ export class AppService {
     });
   }
 
-  async getWordContext(word: string): Promise<any[]> {
-    const words = await this.wordRepository.find({
-      where: { text: word },
+  async getWordContext(word: string, songId: string, contextSize: number = 20): Promise<any[]> {
+    // Debug logs
+    console.log('Search parameters:', { word, songId });
+
+    // First, let's see what words we actually have in the database
+    const sampleWords = await this.wordRepository.find({
+      take: 10,
       relations: ['song'],
     });
-    return words.map((w) => {
-      const context = this.getContext(w);
+    console.log('Sample words in DB:', sampleWords.map(w => w.text));
+
+    // Try to find the word with case-insensitive search
+    const words = await this.wordRepository
+      .createQueryBuilder('word')
+      .leftJoinAndSelect('word.song', 'song')
+      .where('LOWER(word.text) = LOWER(:text)', { text: word.trim() })
+      .andWhere('song.id = :songId', { songId })
+      .getMany();
+
+    // Debug logs
+    console.log('Found words:', words);
+
+    // Try a simpler query if no words found
+    if (!words.length) {
+      console.log('No words found with first query, trying simpler query...');
+      const allWordsInSong = await this.wordRepository.find({
+        where: { 
+          song: { id: songId }
+        },
+        relations: ['song'],
+      });
+      console.log('All words in song:', allWordsInSong.map(w => w.text));
+    }
+
+    // If no valid songId or no words found, return empty array
+    if (!songId || songId === 'undefined' || !words.length) {
+      return [];
+    }
+
+    // Get all words from the song ordered by their position
+    const allSongWords = await this.wordRepository.find({
+      where: { 
+        song: { id: songId }
+      },
+      order: { 
+        paragraphIndex: 'ASC',
+        rowIndex: 'ASC',
+        inRowIndex: 'ASC'
+      }
+    });
+
+    return words.map((targetWord) => {
+      console.log('Processing target word:', targetWord);
+      
+      // Find the index of the target word in allSongWords
+      const wordIndex = allSongWords.findIndex(w => 
+        w.id === targetWord.id
+      );
+      console.log('Found word index:', wordIndex);
+
+      // Get context words before and after
+      const startIndex = Math.max(0, wordIndex - contextSize);
+      const endIndex = Math.min(allSongWords.length, wordIndex + contextSize + 1);
+      
+      // Get the context words
+      const contextWords = allSongWords.slice(startIndex, endIndex);
+
       return {
-        word: w.text,
-        songId: w.song.id,
-        songName: w.song.name,
-        contextInSong: context,
+        word: targetWord.text,
+        songId: targetWord.song.id,
+        songName: targetWord.song.name,
+        contextInSong: contextWords.map(w => {
+          if (w.id === targetWord.id) {
+            return `**${w.text}**`; // Highlight the target word
+          }
+          return w.text;
+        }).join(' '),
+        position: {
+          paragraphIndex: targetWord.paragraphIndex,
+          rowIndex: targetWord.rowIndex,
+          inRowIndex: targetWord.inRowIndex
+        }
       };
     });
   }
