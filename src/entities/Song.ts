@@ -13,8 +13,8 @@ export class Song {
   @Column()
   name: string;
 
-  @Column()
-  author: string;
+  @Column('simple-array')
+  authors: string[]; // Stores as a comma-separated string
 
   @Column('simple-array')
   composers: string[]; // Stores as a comma-separated string
@@ -25,6 +25,5 @@ export class Song {
   @OneToMany(() => Word, (word) => word.song)
   words: Word[];
 
-  @OneToMany(() => UniqueWord, (uniqueWord) => uniqueWord.song)
   uniqueWords: UniqueWord[];
 }
