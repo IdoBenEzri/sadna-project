@@ -15,7 +15,7 @@ export class AppService {
     private readonly songRepository: Repository<Song>,
 
     @InjectRepository(Word)
-    private readonly wordRepository: Repository<Word>,
+    private readonly  wordRepository: Repository<Word>,
 
     @InjectRepository(UniqueWord)
     private readonly uniqueWordRepository: Repository<UniqueWord>,
@@ -44,8 +44,8 @@ export class AppService {
       song.composers = lines[2].split(',').map(c => c.trim());
       song.singers = lines[3].split(',').map(s => s.trim());
       const savedSong = await this.songRepository.save(song);
-      
-      let currentParagraphIndex = 1;
+      await this.parseSongContent(decodedData, savedSong);
+      /*let currentParagraphIndex = 1;
       let emptyLineCount = 0;
       
       // Process each line starting from line 4 (after metadata)
@@ -94,7 +94,7 @@ export class AppService {
           word.uniqueWord = uniqueWord;
           await this.wordRepository.save(word);
         }
-      }
+      }*/
       
       savedSongIds.push(savedSong.id);
     }
@@ -159,31 +159,52 @@ export class AppService {
     
     // Add filtering conditions
     if (query.words) {
-      qb.andWhere('word.text IN (:...words)', {
-        words: query.words.split('.'),
+      // Create a subquery to filter songs but return all words
+      qb.andWhere(qb => {
+        const subQuery = this.songRepository
+          .createQueryBuilder('s')
+          .select('s.id')
+          .leftJoin('s.words', 'w')
+          .where('w.text IN (:...words)', {
+            words: query.words.split('.'),
+          });
+        return 'song.id IN (' + subQuery.getQuery() + ')';
+      })
+      .setParameter('words', query.words.split('.'));
+    }
+    
+    if (query.composers) {
+      const composers = query.composers.split('.').map(composer => composer.trim());
+      qb.andWhere(`ARRAY[:...composers] <@ string_to_array(song.composers::text, ',')`, {
+        composers: composers,
       });
     }
     
-    if (query.composers)
-      qb.andWhere('song.composers IN (:...composers)', {
-        composers: query.composers.split('.'),
-      }); 
-    if (query.singers)
-      qb.andWhere('song.singers IN (:...singers)', {
-        singers: query.singers.split('.'),
-      }); 
-    if (query.authors)
-      qb.andWhere('song.authors IN (:...authors)', {
-        authors: query.authors.split('.'),
-      }); 
-    if (query.name)
-      qb.andWhere('song.name IN (:...name)', {
-        name: query.name.split('.'),
-      }); 
-    if (query.songId)
+    if (query.singers) {
+      const singers = query.singers.split('.').map(singer => singer.trim());
+      qb.andWhere(`ARRAY[:...singers] <@ string_to_array(song.singers::text, ',')`, {
+        singers: singers,
+      });
+    }
+    
+    if (query.authors) {
+      const authors = query.authors.split('.').map(author => author.trim());
+      qb.andWhere(`ARRAY[:...authors] <@ string_to_array(song.authors::text, ',')`, {
+        authors: authors,
+      });
+    }
+    
+    if (query.name) {
+      qb.andWhere('song.name = :name', {
+        name: query.name,
+      });
+    }
+    
+    if (query.songId) {
       qb.andWhere('song.id = :songId', {
         songId: query.songId,
-      }); 
+      });
+    }
 
     // Add distinct to avoid duplicate songs
     qb.distinct(true);
@@ -199,8 +220,6 @@ export class AppService {
         }
         paragraphs[word.paragraphIndex].push(word.text);
       });
-
-      console.log(paragraphs);
       
       return {
         ...song,
@@ -396,21 +415,27 @@ export class AppService {
       }
       acc[songId].chars += word.text.length;
       acc[songId].words += 1;
-      acc[songId].rows.add(word.rowIndex);
+      acc[songId].rows.add(`${word.paragraphIndex}-${word.rowIndex}`); // Track unique rows
       acc[songId].paragraphs.add(word.paragraphIndex);
       return acc;
-    }, {} as Record<string, { chars: number; words: number; rows: Set<number>; paragraphs: Set<number> }>);
+    }, {} as Record<string, { 
+      chars: number; 
+      words: number; 
+      rows: Set<string>; 
+      paragraphs: Set<number> 
+    }>);
 
-    // Sum up total rows and paragraphs across all songs
-    const totalRows = Object.values(songStats)
-      .reduce((sum, stat) => sum + stat.rows.size, 0);
+    // Calculate totals
     const totalParagraphs = Object.values(songStats)
       .reduce((sum, stat) => sum + stat.paragraphs.size, 0);
     
+    const totalRows = Object.values(songStats)
+      .reduce((sum, stat) => sum + stat.rows.size, 0);
+
     // Calculate averages per song
     const songsCount = Object.keys(songStats).length;
-    const avgCharsPerSong = Math.round(Object.values(songStats).reduce((sum, stat) => sum + stat.chars, 0) / songsCount);
-    const avgWordsPerSong = Math.round(Object.values(songStats).reduce((sum, stat) => sum + stat.words, 0) / songsCount);
+    const avgWordsPerSong = Math.round(totalWords / songsCount);
+    const avgCharsPerSong = Math.round(totalChars / songsCount);
     const avgWordsPerRow = Math.round(totalWords / totalRows);
 
     return {
@@ -421,6 +446,17 @@ export class AppService {
       averageCharsPerSong: avgCharsPerSong,
       averageWordsPerSong: avgWordsPerSong,
       averageWordsPerRow: avgWordsPerRow,
+      totalWords,
+      totalRows,
+      totalParagraphs,
+      totalSongs: songsCount,
+      // Add these for debugging if needed
+      songsBreakdown: Object.entries(songStats).map(([songId, stats]) => ({
+        songId,
+        words: stats.words,
+        rows: stats.rows.size,
+        paragraphs: stats.paragraphs.size
+      }))
     };
   }
 
@@ -444,11 +480,6 @@ export class AppService {
       words: words_array,
       occurrences: occurrences_array
     };
-  }
-
-  private getContext(word: Word): string {
-    // Fetch a few words before and after the current word in its song.
-    return `...`; // Context logic to fetch surrounding words
   }
 
   async backupToXml(filepath: string): Promise<void> {
@@ -645,5 +676,73 @@ export class AppService {
         : [parsed.backup.songs.song];
       await this.songRepository.save(songs);
     }
+  }
+
+  async parseSongContent(content: string, song: Song): Promise<Word[]> {
+    const words: Word[] = [];
+    let paragraphIndex = 1;
+    let rowIndex = 1;
+    let inRowIndex = 1;
+
+    // Split content into rows and skip the first 4 rows (metadata)
+    const allRows = content.split('\n').slice(4);
+    
+    // Join remaining rows and split into paragraphs
+    const remainingContent = allRows.join('\n');
+    const paragraphs = remainingContent.split('\n\n');
+    
+    for (const paragraph of paragraphs) {
+        if (paragraph.trim()) {
+            const rows = paragraph.split('\n');
+            for (const row of rows) {
+                if (row.trim()) {
+                    inRowIndex = 1;
+                    const rowWords = row.trim().split(/\s+/);
+                    for (const wordText of rowWords) {
+                        if (wordText.trim()) {
+                            // Clean the word text: remove punctuation and convert to lowercase
+                            const cleanWordText = wordText.trim()
+                                .toLowerCase()
+                                .replace(/[.,]$/g, '')  // Remove trailing periods and commas
+                                .replace(/^[.,]/g, ''); // Remove leading periods and commas
+
+                            if (cleanWordText) {  // Only process if we still have text after cleaning
+                                // Check if UniqueWord exists
+                                let uniqueWord = await this.uniqueWordRepository.findOne({
+                                    where: { text: cleanWordText }
+                                });
+
+                                // Create UniqueWord if it doesn't exist
+                                if (!uniqueWord) {
+                                    uniqueWord = this.uniqueWordRepository.create({
+                                        text: cleanWordText
+                                    });
+                                    await this.uniqueWordRepository.save(uniqueWord);
+                                }
+
+                                // Create Word
+                                const word = this.wordRepository.create({
+                                    text: cleanWordText,
+                                    song: song,
+                                    paragraphIndex: paragraphIndex,
+                                    rowIndex: rowIndex,
+                                    inRowIndex: inRowIndex,
+                                    uniqueWord: uniqueWord
+                                });
+                                await this.wordRepository.save(word);
+                                words.push(word);
+                                inRowIndex++;
+                            }
+                        }
+                    }
+                    rowIndex++;
+                }
+            }
+            paragraphIndex++;
+            rowIndex = 1;
+        }
+    }
+    
+    return words;
   }
 }
