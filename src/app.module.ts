@@ -20,6 +20,7 @@ import { Song, Word, UniqueWord, GroupOfWords, Expression } from './entities';
         username: configService.get<string>('DB_USERNAME'),
         password: configService.get<string>('DB_PASSWORD'),
         database: configService.get<string>('DB_NAME'),
+        entities: [Song, Word, UniqueWord, GroupOfWords, Expression],
         autoLoadEntities: true, // Automatically load entities
         synchronize: true, // This will create/update tables automatically
         logging: true,
