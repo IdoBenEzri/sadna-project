@@ -39,8 +39,8 @@ export class SongController {
 
   @Post('group-of-words')
   async createGroupOfWords(@Body() body: { name: string; words: string[] }) {
-    await this.AppService.createGroupOfWords(body.name, body.words);
-    return { message: 'Group of words created successfully' };
+    const groupId = await this.AppService.createGroupOfWords(body.name, body.words);
+    return { groupId, message: 'Group of words created successfully' };
   }
 
   @Get('group-of-words')
@@ -59,11 +59,11 @@ export class SongController {
     return { message: 'Expression added successfully' };
   }
 
-  @Post('expression/search')
+  @Get('expression/search')
   async searchExpression(
-    @Body() body: { expression: string; songId: string },
+    @Query() query: { expression: string; songId: string },
   ): Promise<any[]> {
-    return this.AppService.searchExpression(body.expression, body.songId);
+    return this.AppService.searchExpression(query.expression, query.songId);
   }
 
   @Get('statistics')

@@ -4,6 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import * as xml2js from 'xml2js';
 import * as fs from 'fs/promises';
 import { XMLParser, XMLBuilder } from 'fast-xml-parser';
+import { v4 as uuid } from 'uuid';
 
 import { Song, Word, UniqueWord, GroupOfWords, Expression } from './entities';
 
@@ -296,12 +297,25 @@ export class AppService {
   }
 
   async createGroupOfWords(name: string, words: string[]): Promise<void> {
-    const group = this.groupOfWordsRepository.create({
-      name,
-      groupId: Date.now().toString(),
-      uniqueWord: null,
-    });
-    await this.groupOfWordsRepository.save(group);
+    const groupId =  uuid();
+
+    for (const wordText of words) {
+      let uniqueWord = await this.uniqueWordRepository.findOne({ where: { text: wordText.trim().toLowerCase() } });
+
+      if (!uniqueWord) {
+        uniqueWord = this.uniqueWordRepository.create({ text: wordText.trim().toLowerCase() });
+        await this.uniqueWordRepository.save(uniqueWord);
+      }
+
+      const groupOfWords = this.groupOfWordsRepository.create({
+        name,
+        uniqueWord,
+        groupId: groupId,
+      });
+
+      await this.groupOfWordsRepository.save(groupOfWords);
+    }
+    return groupId;
   }
 
   async getGroups(): Promise<string[]> {
@@ -310,19 +324,20 @@ export class AppService {
   }
 
   async getGroupIndexes(groupId: string): Promise<any> {
-    const group = await this.groupOfWordsRepository.findOne({
+    const wordsInGroup = await this.groupOfWordsRepository.find({
       where: { groupId },
       relations: ['uniqueWord'],
     });
-    if (!group) throw new Error('Group not found');
+    if (!wordsInGroup.length) throw new Error('Group not found');
 
     const indexes = {};
-    const words = await this.wordRepository.find({
-      where: { uniqueWord: group.uniqueWord },
+    for (const wordInGroup of wordsInGroup) {
+      const words = await this.wordRepository.find({
+      where: { uniqueWord: wordInGroup.uniqueWord },
       relations: ['song'],
-    });
+      });
 
-    for (const word of words) {
+      for (const word of words) {
       if (!indexes[word.text]) {
         indexes[word.text] = [];
       }
@@ -332,6 +347,7 @@ export class AppService {
         rowIndex: word.rowIndex,
         paragraphIndex: word.paragraphIndex,
       });
+      }
     }
     return indexes;
   }
@@ -353,7 +369,7 @@ export class AppService {
     for (let i = 0; i < song.words.length - expressionWords.length + 1; i++) {
       const segment = song.words.slice(i, i + expressionWords.length);
       if (segment.map((word) => word.text).join(' ') === expression) {
-        matches.push({ index: i });
+        matches.push({ index: i +1 });
       }
     }
     return matches;
