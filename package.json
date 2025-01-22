@@ -19,9 +19,8 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "deploy-ngrok": "ngrok http --url=awaited-mentally-rabbit.ngrok-free.app 8080",
-    "typeorm": "typeorm-ts-node-commonjs",
-    "migration:run": "npm run typeorm migration:run -- -d src/data-source.ts",
-    "migration:revert": "npm run typeorm migration:revert -- -d src/data-source.ts"
+    "restore-db": "ts-node scripts/restore-backup.ts",
+    "backup-db": "ts-node scripts/create-backup.ts"
   },
   "dependencies": {
     "@nestjs/common": "^10.0.0",
@@ -29,11 +28,14 @@
     "@nestjs/core": "^10.0.0",
     "@nestjs/platform-express": "^10.0.0",
     "@nestjs/typeorm": "^10.0.2",
+    "@types/xml2js": "^0.4.14",
+    "fast-xml-parser": "^4.5.1",
     "mysql": "^2.18.1",
     "pg": "^8.13.1",
     "reflect-metadata": "^0.1.13",
     "rxjs": "^7.8.1",
-    "typeorm": "^0.3.20"
+    "typeorm": "^0.3.20",
+    "xml2js": "^0.6.2"
   },
   "devDependencies": {
     "@nestjs/cli": "^10.0.0",

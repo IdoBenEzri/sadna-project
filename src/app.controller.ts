@@ -1,27 +1,31 @@
-import { Controller, Post, Get, Body, Query } from '@nestjs/common';
+import { Controller, Post, Get, Body, Query, Param, HttpException, HttpStatus, Header } from '@nestjs/common';
 import { AppService } from './app.service';
+import * as fs from 'fs';
 
 @Controller('song')
 export class SongController {
   constructor(private readonly AppService: AppService) {}
 
   @Post('upload')
-  async uploadSong(@Body() body: { filename: string , fileData: string, name: string;
-    authors: string;
-    composers: string;
-    singers: string; }): Promise<{ songId: string }> {
+  async uploadSongs(@Body() body: { filenames: string[], data:  string[] }): Promise<{ songIds: string[] }> {
     console.log(body);
-    const songId = await this.AppService.uploadSong(body);
-    return { songId };
+    const songIds = await this.AppService.uploadSongs(body);
+    return { songIds };
+  }
+
+  @Get('songs')
+  async getSongs( @Query() query: { words?: string, composers?: string, singers?: string, authors?: string, name?: string, songId?: string }): Promise<any[]> {
+    return this.AppService.getSongs(query);
+    
   }
 
   @Get('words')
   async getWords(
     @Query()
     query: {
-      rowIndex?: number;
-      inlineIndex?: number;
-      paragraphIndex?: number;
+      rowIndex?: string;
+      inlineIndex?: string;
+      paragraphIndex?: string;
       song_ids?: string;
     },
   ): Promise<any[]> {
@@ -29,14 +33,14 @@ export class SongController {
   }
 
   @Get('word/context')
-  async getWordContext(@Query('word') word: string): Promise<any[]> {
-    return this.AppService.getWordContext(word);
+  async getWordContext(@Query() query: { word: string, songId: string }): Promise<any[]> {
+    return this.AppService.getWordContext(query.word, query.songId);
   }
 
   @Post('group-of-words')
   async createGroupOfWords(@Body() body: { name: string; words: string[] }) {
-    await this.AppService.createGroupOfWords(body.name, body.words);
-    return { message: 'Group of words created successfully' };
+    const groupId = await this.AppService.createGroupOfWords(body.name, body.words);
+    return { groupId, message: 'Group of words created successfully' };
   }
 
   @Get('group-of-words')
@@ -55,11 +59,11 @@ export class SongController {
     return { message: 'Expression added successfully' };
   }
 
-  @Post('expression/search')
+  @Get('expression/search')
   async searchExpression(
-    @Body() body: { expression: string; songId: string },
+    @Query() query: { expression: string; songId: string },
   ): Promise<any[]> {
-    return this.AppService.searchExpression(body.expression, body.songId);
+    return this.AppService.searchExpression(query.expression, query.songId);
   }
 
   @Get('statistics')
@@ -68,7 +72,57 @@ export class SongController {
   }
 
   @Get('statistics/occurences')
-  async getWordOccurrences(): Promise<any[]> {
+  async getWordOccurrences(): Promise<{words: string[], occurrences: number[]}> {
     return this.AppService.getWordOccurrences();
   }
+
+  @Post('backup')
+  async backupDatabase(@Body() body: { filepath: string }) {
+    try {
+      await this.AppService.backupToXml(body.filepath);
+      return { message: 'Database backup completed successfully' };
+    } catch (error) {
+      throw new HttpException(
+        `Failed to backup database: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR
+      );
+    }
+  }
+
+  @Post('restore')
+  async restoreDatabase(@Body() body: { filepath: string }) {
+    try {
+      await this.AppService.restoreFromXml(body.filepath);
+      return { message: 'Database restored successfully' };
+    } catch (error) {
+      throw new HttpException(
+        `Failed to restore database: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR
+      );
+    }
+  }
+
+  @Get('export-xml')
+  @Header('Content-Type', 'application/xml')
+  @Header('Content-Disposition', 'attachment; filename="backup.xml"')
+  async exportXml() {
+    const xmlContent = await this.AppService.exportToXml();
+    return xmlContent;
+  }
+
+  @Post('import-xml')
+  async importXml(@Body('xml') xml: string) {
+    await this.AppService.importFromXml(xml);
+    return { message: 'Import completed successfully' };
+  }
+
+  @Post('import-xml-file')
+  async importXmlFile() {
+    const xmlContent = fs.readFileSync('backup.xml', 'utf-8');
+    await this.AppService.importFromXml(xmlContent);
+    return { message: 'Import from file completed successfully' };
+  }
 }
+
+
+

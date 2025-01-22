@@ -1,14 +1,14 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne } from 'typeorm';
+import { Entity, Column, PrimaryGeneratedColumn, ManyToOne } from 'typeorm';
 import { Song } from './Song';
 import { UniqueWord } from './UniqueWord';
 
-@Entity()
+@Entity('word')
 export class Word {
   @PrimaryGeneratedColumn()
-  id: string;
+  id: number;
 
-  @ManyToOne(() => Song, (song) => song.words)
-  song: Song;
+  @Column()
+  text: string;
 
   @Column()
   rowIndex: number;
@@ -19,9 +19,9 @@ export class Word {
   @Column()
   inRowIndex: number;
 
-  @Column()
-  text: string;
+  @ManyToOne(() => Song, song => song.words)
+  song: Song;
 
-  @ManyToOne(() => UniqueWord, (uniqueWord) => uniqueWord.words)
+  @ManyToOne(() => UniqueWord)
   uniqueWord: UniqueWord;
 }
