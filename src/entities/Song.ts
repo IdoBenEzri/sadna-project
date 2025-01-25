@@ -6,22 +6,25 @@ export class Song {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column()
+  @Column({ nullable: false })
   name: string;
 
-  @Column()
+  @Column({ nullable: false })
   filename: string;
 
-  @Column('text', { array: true })
+  @Column('text', { array: true, nullable: false, default: [] })
   authors: string[];
 
-  @Column('text', { array: true })
+  @Column('text', { array: true, nullable: false, default: [] })
   composers: string[];
 
-  @Column('text', { array: true })
+  @Column('text', { array: true, nullable: false, default: [] })
   singers: string[];
 
-  @OneToMany(() => Word, word => word.song)
+  @OneToMany(() => Word, word => word.song, {
+    cascade: true,
+    onDelete: 'CASCADE'
+  })
   words: Word[];
 
   getAuthorsArray(): string[] {
