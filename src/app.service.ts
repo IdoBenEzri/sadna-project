@@ -41,9 +41,9 @@ export class AppService {
       
       // Handle metadata - store as comma-separated strings
       song.name = lines[0].trim();
-      song.authors = lines[1].split(',').map(a => a.trim()).filter(Boolean).join(',');
-      song.composers = lines[2].split(',').map(c => c.trim()).filter(Boolean).join(',');
-      song.singers = lines[3].split(',').map(s => s.trim()).filter(Boolean).join(',');
+      song.authors = lines[1].split(',').map(a => a.trim()).filter(Boolean);
+      song.composers = lines[2].split(',').map(c => c.trim()).filter(Boolean);
+      song.singers = lines[3].split(',').map(s => s.trim()).filter(Boolean);
       
       const savedSong = await this.songRepository.save(song);
       await this.parseSongContent(decodedData, savedSong);
@@ -123,35 +123,41 @@ export class AppService {
       });
     }
 
-    // Use string pattern matching for comma-separated lists
+    // Use array operations for searching
     if (query.composers) {
-      const composer = query.composers.trim().toLowerCase();
-      qb.andWhere(new Brackets(qb => {
-        qb.where('LOWER(song.composers) = :composer', { composer })
-          .orWhere('LOWER(song.composers) LIKE :composerStart', { composerStart: `${composer},%` })
-          .orWhere('LOWER(song.composers) LIKE :composerMiddle', { composerMiddle: `%,${composer},%` })
-          .orWhere('LOWER(song.composers) LIKE :composerEnd', { composerEnd: `%,${composer}` });
-      }));
+      const composerTerms = query.composers.toLowerCase().split(',').map(c => c.trim()).filter(Boolean);
+      qb.andWhere(`
+        EXISTS (
+          SELECT 1 FROM unnest(song.composers) composer
+          WHERE LOWER(composer) IN (:...composerTerms)
+        )
+      `, { 
+        composerTerms: composerTerms
+      });
     }
 
     if (query.singers) {
-      const singer = query.singers.trim().toLowerCase();
-      qb.andWhere(new Brackets(qb => {
-        qb.where('LOWER(song.singers) = :singer', { singer })
-          .orWhere('LOWER(song.singers) LIKE :singerStart', { singerStart: `${singer},%` })
-          .orWhere('LOWER(song.singers) LIKE :singerMiddle', { singerMiddle: `%,${singer},%` })
-          .orWhere('LOWER(song.singers) LIKE :singerEnd', { singerEnd: `%,${singer}` });
-      }));
+      const singerTerms = query.singers.toLowerCase().split(',').map(s => s.trim()).filter(Boolean);
+      qb.andWhere(`
+        EXISTS (
+          SELECT 1 FROM unnest(song.singers) singer
+          WHERE LOWER(singer) IN (:...singerTerms)
+        )
+      `, { 
+        singerTerms: singerTerms
+      });
     }
 
     if (query.authors) {
-      const author = query.authors.trim().toLowerCase();
-      qb.andWhere(new Brackets(qb => {
-        qb.where('LOWER(song.authors) = :author', { author })
-          .orWhere('LOWER(song.authors) LIKE :authorStart', { authorStart: `${author},%` })
-          .orWhere('LOWER(song.authors) LIKE :authorMiddle', { authorMiddle: `%,${author},%` })
-          .orWhere('LOWER(song.authors) LIKE :authorEnd', { authorEnd: `%,${author}` });
-      }));
+      const authorTerms = query.authors.toLowerCase().split(',').map(a => a.trim()).filter(Boolean);
+      qb.andWhere(`
+        EXISTS (
+          SELECT 1 FROM unnest(song.authors) author
+          WHERE LOWER(author) IN (:...authorTerms)
+        )
+      `, { 
+        authorTerms: authorTerms
+      });
     }
 
     if (query.songId) {

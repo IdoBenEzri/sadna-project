@@ -12,27 +12,27 @@ export class Song {
   @Column()
   filename: string;
 
-  @Column('text')
-  authors: string;  // Stored as comma-separated string: "author1,author2,author3"
+  @Column('text', { array: true })
+  authors: string[];
 
-  @Column('text')
-  composers: string;  // Stored as comma-separated string: "composer1,composer2"
+  @Column('text', { array: true })
+  composers: string[];
 
-  @Column('text')
-  singers: string;  // Stored as comma-separated string: "singer1,singer2"
+  @Column('text', { array: true })
+  singers: string[];
 
   @OneToMany(() => Word, word => word.song)
   words: Word[];
 
   getAuthorsArray(): string[] {
-    return this.authors ? this.authors.split(',').map(a => a.trim()) : [];
+    return this.authors ? this.authors.map(a => a.trim()) : [];
   }
 
   getComposersArray(): string[] {
-    return this.composers ? this.composers.split(',').map(c => c.trim()) : [];
+    return this.composers ? this.composers.map(c => c.trim()) : [];
   }
 
   getSingersArray(): string[] {
-    return this.singers ? this.singers.split(',').map(s => s.trim()) : [];
+    return this.singers ? this.singers.map(s => s.trim()) : [];
   }
 }
