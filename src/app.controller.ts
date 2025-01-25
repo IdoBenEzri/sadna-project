@@ -14,7 +14,7 @@ export class SongController {
   }
 
   @Get('songs')
-  async getSongs( @Query() query: { words?: string, composers?: string, singers?: string, authors?: string, name?: string, songId?: string }): Promise<any[]> {
+  async getSongs( @Query() query: { words?: string, composers?: string, singers?: string, authors?: string, name?: string, songId?: string, expression?: string }): Promise<any[]> {
     return this.AppService.getSongs(query);
     
   }
@@ -37,10 +37,31 @@ export class SongController {
     return this.AppService.getWordContext(query.word, query.songId);
   }
 
+  @Get('unique-word/words')
+  async getUniqueWordWords(): Promise<string[]> {
+    return this.AppService.getUniqueWords();
+  }
+
   @Post('group-of-words')
   async createGroupOfWords(@Body() body: { name: string; words: string[] }) {
     const groupId = await this.AppService.createGroupOfWords(body.name, body.words);
     return { groupId, message: 'Group of words created successfully' };
+  }
+
+  @Post('group-of-words/add-word')
+  async addWordToGroup(@Body() body: { groupId: string; words: string[] }) {
+    await this.AppService.addWordToGroup(body.groupId, body.words);
+    return { message: 'Word added to group successfully' };
+  }
+
+  @Get('group-of-words/all')
+  async getAllGroupWords(): Promise<string[]> {
+    return this.AppService.getAllGroupWords();
+  }
+
+  @Get('group-of-words/words')
+  async getGroupWords(@Query('groupId') groupId: string): Promise<string[]> {
+    return this.AppService.getGroupWords(groupId);
   }
 
   @Get('group-of-words')
@@ -61,9 +82,9 @@ export class SongController {
 
   @Get('expression/search')
   async searchExpression(
-    @Query() query: { expression: string; songId: string },
+    @Query() query: { expression: string },
   ): Promise<any[]> {
-    return this.AppService.searchExpression(query.expression, query.songId);
+    return this.AppService.searchExpression(query.expression);
   }
 
   @Get('statistics')
@@ -74,6 +95,11 @@ export class SongController {
   @Get('statistics/occurences')
   async getWordOccurrences(): Promise<{words: string[], occurrences: number[]}> {
     return this.AppService.getWordOccurrences();
+  }
+
+  @Get('expression/all')
+  async getAllExpressions(): Promise<any[]> {
+    return this.AppService.getAllExpressions();
   }
 
   @Post('backup')

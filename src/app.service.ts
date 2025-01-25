@@ -5,6 +5,7 @@ import * as xml2js from 'xml2js';
 import * as fs from 'fs/promises';
 import { XMLParser, XMLBuilder } from 'fast-xml-parser';
 import { v4 as uuid } from 'uuid';
+import { Brackets } from 'typeorm';
 
 import { Song, Word, UniqueWord, GroupOfWords, Expression } from './entities';
 
@@ -38,63 +39,14 @@ export class AppService {
       const decodedData = Buffer.from(songData, 'base64').toString('utf-8');
       const lines = decodedData.split('\n');
       
-      // Handle metadata
-      song.name = lines[0];
-      song.authors = lines[1].split(',').map(a => a.trim());
-      song.composers = lines[2].split(',').map(c => c.trim());
-      song.singers = lines[3].split(',').map(s => s.trim());
+      // Handle metadata - store as comma-separated strings
+      song.name = lines[0].trim();
+      song.authors = lines[1].split(',').map(a => a.trim()).filter(Boolean).join(',');
+      song.composers = lines[2].split(',').map(c => c.trim()).filter(Boolean).join(',');
+      song.singers = lines[3].split(',').map(s => s.trim()).filter(Boolean).join(',');
+      
       const savedSong = await this.songRepository.save(song);
       await this.parseSongContent(decodedData, savedSong);
-      /*let currentParagraphIndex = 1;
-      let emptyLineCount = 0;
-      
-      // Process each line starting from line 4 (after metadata)
-      for (let rowIndex = 4; rowIndex < lines.length; rowIndex++) {
-        const line = lines[rowIndex].trim();
-        
-        if (!line) {
-          emptyLineCount++;
-          if (emptyLineCount === 2) {
-            currentParagraphIndex++;
-            emptyLineCount = 0;
-          }
-          continue;
-        }
-        emptyLineCount = 0;
-        
-        // Split by spaces and filter out commas and periods
-        const words = line
-          .replace(/[,.]/g, '') // Remove commas and periods
-          .split(/\s+/)
-          .filter(word => word.length > 0); // Remove empty strings
-        
-        for (let inRowIndex = 0; inRowIndex < words.length; inRowIndex++) {
-          const wordText = words[inRowIndex];
-          if (!wordText) continue;
-          
-          const word = this.wordRepository.create({
-            text: wordText.trim().toLowerCase(),
-            song: savedSong,
-            rowIndex: rowIndex - 3,
-            paragraphIndex: currentParagraphIndex,
-            inRowIndex: inRowIndex + 1,
-          });
-          
-          let uniqueWord = await this.uniqueWordRepository.findOne({
-            where: { text: wordText.trim().toLowerCase() }
-          });
-          
-          if (!uniqueWord) {
-            uniqueWord = this.uniqueWordRepository.create({
-              text: wordText.trim().toLowerCase()
-            });
-            await this.uniqueWordRepository.save(uniqueWord);
-          }
-          
-          word.uniqueWord = uniqueWord;
-          await this.wordRepository.save(word);
-        }
-      }*/
       
       savedSongIds.push(savedSong.id);
     }
@@ -147,84 +99,198 @@ export class AppService {
     return qb.getMany();
   }
 
-  async getSongs(query: { words?: string, composers?: string, singers?: string, authors?: string, name?: string, songId?: string }): Promise<any[]> {
-    const qb = this.songRepository.createQueryBuilder('song');
-    
-    // Always join with words to include them in the result
-    qb.leftJoin('song.words', 'word')
-      .addSelect(['word.text', 'word.rowIndex', 'word.paragraphIndex', 'word.inRowIndex'])
-      .orderBy('word.paragraphIndex', 'ASC')
-      .addOrderBy('word.rowIndex', 'ASC')
-      .addOrderBy('word.inRowIndex', 'ASC');
-    
-    // Add filtering conditions
-    if (query.words) {
-      // Create a subquery to filter songs but return all words
-      qb.andWhere(qb => {
-        const subQuery = this.songRepository
-          .createQueryBuilder('s')
-          .select('s.id')
-          .leftJoin('s.words', 'w')
-          .where('w.text IN (:...words)', {
-            words: query.words.split('.'),
-          });
-        return 'song.id IN (' + subQuery.getQuery() + ')';
-      })
-      .setParameter('words', query.words.split('.'));
+  async getSongs(query: { 
+    words?: string, 
+    composers?: string, 
+    singers?: string, 
+    authors?: string, 
+    name?: string, 
+    songId?: string,
+    expression?: string 
+  }): Promise<any[]> {
+    // Start building the query
+    let qb = this.songRepository.createQueryBuilder('song');
+
+    // If searching by words, ensure the song contains the word
+    if (query.words && query.words.trim()) {
+      qb.innerJoin('song.words', 'filterWord', 'LOWER(filterWord.text) = LOWER(:word)', { word: query.words.toLowerCase().trim() });
     }
-    
-    if (query.composers) {
-      const composers = query.composers.split('.').map(composer => composer.trim());
-      qb.andWhere(`ARRAY[:...composers] <@ string_to_array(song.composers::text, ',')`, {
-        composers: composers,
-      });
-    }
-    
-    if (query.singers) {
-      const singers = query.singers.split('.').map(singer => singer.trim());
-      qb.andWhere(`ARRAY[:...singers] <@ string_to_array(song.singers::text, ',')`, {
-        singers: singers,
-      });
-    }
-    
-    if (query.authors) {
-      const authors = query.authors.split('.').map(author => author.trim());
-      qb.andWhere(`ARRAY[:...authors] <@ string_to_array(song.authors::text, ',')`, {
-        authors: authors,
-      });
-    }
-    
+
+    // Apply metadata filters
     if (query.name) {
-      qb.andWhere('song.name = :name', {
-        name: query.name,
-      });
-    }
-    
-    if (query.songId) {
-      qb.andWhere('song.id = :songId', {
-        songId: query.songId,
+      qb.andWhere('LOWER(song.name) LIKE LOWER(:name)', { 
+        name: `%${query.name.toLowerCase().trim()}%` 
       });
     }
 
-    // Add distinct to avoid duplicate songs
-    qb.distinct(true);
-    
+    // Use string pattern matching for comma-separated lists
+    if (query.composers) {
+      const composer = query.composers.trim().toLowerCase();
+      qb.andWhere(new Brackets(qb => {
+        qb.where('LOWER(song.composers) = :composer', { composer })
+          .orWhere('LOWER(song.composers) LIKE :composerStart', { composerStart: `${composer},%` })
+          .orWhere('LOWER(song.composers) LIKE :composerMiddle', { composerMiddle: `%,${composer},%` })
+          .orWhere('LOWER(song.composers) LIKE :composerEnd', { composerEnd: `%,${composer}` });
+      }));
+    }
+
+    if (query.singers) {
+      const singer = query.singers.trim().toLowerCase();
+      qb.andWhere(new Brackets(qb => {
+        qb.where('LOWER(song.singers) = :singer', { singer })
+          .orWhere('LOWER(song.singers) LIKE :singerStart', { singerStart: `${singer},%` })
+          .orWhere('LOWER(song.singers) LIKE :singerMiddle', { singerMiddle: `%,${singer},%` })
+          .orWhere('LOWER(song.singers) LIKE :singerEnd', { singerEnd: `%,${singer}` });
+      }));
+    }
+
+    if (query.authors) {
+      const author = query.authors.trim().toLowerCase();
+      qb.andWhere(new Brackets(qb => {
+        qb.where('LOWER(song.authors) = :author', { author })
+          .orWhere('LOWER(song.authors) LIKE :authorStart', { authorStart: `${author},%` })
+          .orWhere('LOWER(song.authors) LIKE :authorMiddle', { authorMiddle: `%,${author},%` })
+          .orWhere('LOWER(song.authors) LIKE :authorEnd', { authorEnd: `%,${author}` });
+      }));
+    }
+
+    if (query.songId) {
+      qb.andWhere('song.id = :songId', { songId: query.songId });
+    }
+
+    // Include all words for the matched songs
+    qb.leftJoinAndSelect('song.words', 'word');
+
+    // Apply ordering
+    qb.orderBy('word.paragraphIndex', 'ASC')
+      .addOrderBy('word.rowIndex', 'ASC')
+      .addOrderBy('word.inRowIndex', 'ASC');
+
+    // Execute the query
     const songs = await qb.getMany();
-    
-    // Transform the results to include text organized by paragraphs
+
+    // If searching by expression, process accordingly
+    if (query.expression && query.expression !== 'null') {
+      const expressionWords = query.expression.toLowerCase().split(' ').filter(w => w.trim());
+      const filteredSongs = [];
+
+      for (const song of songs) {
+        // Sort words by their position
+        const orderedWords = song.words.sort((a, b) => {
+          if (a.paragraphIndex !== b.paragraphIndex) {
+            return a.paragraphIndex - b.paragraphIndex;
+          }
+          if (a.rowIndex !== b.rowIndex) {
+            return a.rowIndex - b.rowIndex;
+          }
+          return a.inRowIndex - b.inRowIndex;
+        });
+
+        // Organize words into paragraphs and rows
+        const paragraphs: Record<number, Record<number, string[]>> = {};
+        orderedWords.forEach(word => {
+          if (!paragraphs[word.paragraphIndex]) {
+            paragraphs[word.paragraphIndex] = {};
+          }
+          if (!paragraphs[word.paragraphIndex][word.rowIndex]) {
+            paragraphs[word.paragraphIndex][word.rowIndex] = [];
+          }
+          paragraphs[word.paragraphIndex][word.rowIndex].push(word.text);
+        });
+
+        // Find expression matches
+        const matches = [];
+        for (let i = 0; i <= orderedWords.length - expressionWords.length; i++) {
+          let isMatch = true;
+          const currentWord = orderedWords[i];
+
+          for (let j = 0; j < expressionWords.length; j++) {
+            const nextWord = orderedWords[i + j];
+            if (
+              !nextWord ||
+              nextWord.paragraphIndex !== currentWord.paragraphIndex ||
+              nextWord.rowIndex !== currentWord.rowIndex ||
+              nextWord.inRowIndex !== currentWord.inRowIndex + j ||
+              nextWord.text.toLowerCase() !== expressionWords[j]
+            ) {
+              isMatch = false;
+              break;
+            }
+          }
+
+          if (isMatch) {
+            matches.push({
+              paragraphIndex: currentWord.paragraphIndex,
+              rowIndex: currentWord.rowIndex,
+              startIndex: currentWord.inRowIndex,
+              endIndex: currentWord.inRowIndex + expressionWords.length - 1,
+              matchedText: expressionWords.join(' ')
+            });
+          }
+        }
+
+        if (matches.length > 0) {
+          filteredSongs.push({
+            id: song.id,
+            name: song.name,
+            composers: song.composers,
+            singers: song.singers,
+            authors: song.authors,
+            matches: matches,
+            text: Object.entries(paragraphs)
+              .sort(([a], [b]) => Number(a) - Number(b))
+              .map(([_, rows]) => 
+                Object.entries(rows)
+                  .sort(([a], [b]) => Number(a) - Number(b))
+                  .map(([_, words]) => words.join(' '))
+                  .join('\n')
+              )
+              .join('\n\n')
+          });
+        }
+      }
+      return filteredSongs;
+    }
+
+    // Format the songs with all their words
     return songs.map(song => {
-      const paragraphs = {};
+      if (!song.words || song.words.length === 0) {
+        return {
+          id: song.id,
+          name: song.name,
+          composers: song.composers,
+          singers: song.singers,
+          authors: song.authors,
+          text: ''
+        };
+      }
+
+      const paragraphs: Record<number, Record<number, string[]>> = {};
       song.words.forEach(word => {
         if (!paragraphs[word.paragraphIndex]) {
-          paragraphs[word.paragraphIndex] = [];
+          paragraphs[word.paragraphIndex] = {};
         }
-        paragraphs[word.paragraphIndex].push(word.text);
+        if (!paragraphs[word.paragraphIndex][word.rowIndex]) {
+          paragraphs[word.paragraphIndex][word.rowIndex] = [];
+        }
+        paragraphs[word.paragraphIndex][word.rowIndex].push(word.text);
       });
-      
+
       return {
-        ...song,
-        text: Object.values(paragraphs).map((paragraph: string[]) => paragraph.join(' '))
-          ?.join('\n\n')
+        id: song.id,
+        name: song.name,
+        composers: song.composers,
+        singers: song.singers,
+        authors: song.authors,
+        text: Object.entries(paragraphs)
+          .sort(([a], [b]) => Number(a) - Number(b))
+          .map(([_, rows]) => 
+            Object.entries(rows)
+              .sort(([a], [b]) => Number(a) - Number(b))
+              .map(([_, words]) => words.join(' '))
+              .join('\n')
+          )
+          .join('\n\n')
       };
     });
   }
@@ -315,6 +381,17 @@ export class AppService {
     });
   }
 
+  async getUniqueWords(): Promise<string[]> {
+    const uniqueWords = await this.uniqueWordRepository.find();
+    return uniqueWords.map(word => word.text);
+  }
+
+  async getGroupWords(groupId: string): Promise<string[]> {
+    const group = await this.groupOfWordsRepository.findOne({ where: { groupId } });
+    if (!group) throw new Error('Group not found');
+    return group.uniqueWord.words.map(word => word.text);
+  }
+
   async createGroupOfWords(name: string, words: string[]): Promise<void> {
     const groupId =  uuid();
 
@@ -337,61 +414,172 @@ export class AppService {
     return groupId;
   }
 
+  async addWordToGroup(groupId: string, words: string[]): Promise<void> {
+    console.log('Adding words to group:', { groupId, words });
+    for (const word of words) {
+      const uniqueWord = await this.uniqueWordRepository.findOne({ where: { text: word.trim().toLowerCase() } });
+      if (!uniqueWord) throw new Error('Unique word not found');
+      const group = await this.groupOfWordsRepository.findOne({ where: { groupId } });
+      if (!group) throw new Error('Group not found');
+      const existingGroup = await this.groupOfWordsRepository.findOne({ where: { uniqueWord: uniqueWord, groupId: groupId } });
+      if (!existingGroup) {
+        const groupOfWords = this.groupOfWordsRepository.create({
+          name: group.name,
+          uniqueWord: uniqueWord,
+          groupId: groupId,
+        });
+        await this.groupOfWordsRepository.save(groupOfWords);
+      }
+    }
+  }
+
+  async getAllGroupWords(): Promise<any[]> {
+    const groups = await this.groupOfWordsRepository
+      .createQueryBuilder('group')
+      .leftJoinAndSelect('group.uniqueWord', 'uniqueWord')
+      .select([
+        'group.groupId',
+        'group.name',
+        'array_agg(uniqueWord.text) as words'
+      ])
+      .groupBy('group.groupId, group.name')
+      .getRawMany();
+    console.log('Groups:', groups);
+    return groups.map(group => ({
+      groupId: group.group_groupId,
+      name: group.group_name,
+      words: group.words || []
+    }));
+  }
+
   async getGroups(): Promise<string[]> {
     const groups = await this.groupOfWordsRepository.find();
     return groups.map((group) => group.name);
   }
 
-  async getGroupIndexes(groupId: string): Promise<any> {
+  async getGroupIndexes(groupId: string): Promise<any[]> {
     const wordsInGroup = await this.groupOfWordsRepository.find({
       where: { groupId },
       relations: ['uniqueWord'],
     });
     if (!wordsInGroup.length) throw new Error('Group not found');
 
-    const indexes = {};
+    const results = [];
     for (const wordInGroup of wordsInGroup) {
       const words = await this.wordRepository.find({
-      where: { uniqueWord: wordInGroup.uniqueWord },
-      relations: ['song'],
+        where: { uniqueWord: wordInGroup.uniqueWord },
+        relations: ['song'],
       });
 
       for (const word of words) {
-      if (!indexes[word.text]) {
-        indexes[word.text] = [];
-      }
-      indexes[word.text].push({
-        songName: word.song.name,
-        inlineIndex: word.inRowIndex,
-        rowIndex: word.rowIndex,
-        paragraphIndex: word.paragraphIndex,
-      });
+        results.push({
+          word: word.text,
+          songName: word.song.name,
+          songId: word.song.id,
+          inlineIndex: word.inRowIndex,
+          rowIndex: word.rowIndex,
+          paragraphIndex: word.paragraphIndex,
+        });
       }
     }
-    return indexes;
+    return results;
   }
 
   async addExpression(expression: string): Promise<void> {
-    const expr = this.expressionRepository.create({ text: expression });
+    // Split expression into words and clean them
+    const words = expression.toLowerCase().split(' ').filter(w => w.trim());
+    
+    // Find unique words and collect their IDs
+    const uniqueWordIds = [];
+    for (const word of words) {
+      const uniqueWord = await this.uniqueWordRepository.findOne({
+        where: { text: word.trim() }
+      });
+      if (uniqueWord) {
+        uniqueWordIds.push(uniqueWord.id);
+      }
+    }
+
+    // Create and save the expression with the unique word IDs
+    const expr = this.expressionRepository.create({ 
+      text: expression,
+      uniqueWordIds: uniqueWordIds 
+    });
     await this.expressionRepository.save(expr);
   }
 
-  async searchExpression(expression: string, songId: string): Promise<any[]> {
-    const song = await this.songRepository.findOne({
-      where: { id: songId },
-      relations: ['words'],
+  async searchExpression(expression: string): Promise<any[]> {
+    // Get all songs with their words
+    const songs = await this.songRepository.find({
+      relations: ['words']
     });
-    if (!song) throw new Error('Song not found');
+    if (!songs.length) throw new Error('No songs found');
 
     const matches = [];
-    const expressionWords = expression.split(' ');
-    for (let i = 0; i < song.words.length - expressionWords.length + 1; i++) {
-      const segment = song.words.slice(i, i + expressionWords.length);
-      if (segment.map((word) => word.text).join(' ') === expression) {
-        matches.push({ index: i +1 });
+    const expressionWords = expression.toLowerCase().split(' ');
+
+    // Search through each song
+    for (const song of songs) {
+      // Get all words ordered by their position
+      const orderedWords = song.words.sort((a, b) => {
+        if (a.paragraphIndex !== b.paragraphIndex) {
+          return a.paragraphIndex - b.paragraphIndex;
+        }
+        if (a.rowIndex !== b.rowIndex) {
+          return a.rowIndex - b.rowIndex;
+        }
+        return a.inRowIndex - b.inRowIndex;
+      });
+
+      // Iterate through words in the song
+      for (let i = 0; i < orderedWords.length - expressionWords.length + 1; i++) {
+        const currentWord = orderedWords[i];
+        let isMatch = true;
+
+        // Check if we're at valid boundaries (same row and paragraph)
+        for (let j = 0; j < expressionWords.length; j++) {
+          const nextWord = orderedWords[i + j];
+          
+          // Check if words are in the same paragraph and row
+          if (!nextWord || 
+              nextWord.paragraphIndex !== currentWord.paragraphIndex || 
+              nextWord.rowIndex !== currentWord.rowIndex ||
+              nextWord.inRowIndex !== currentWord.inRowIndex + j) {
+            isMatch = false;
+            break;
+          }
+
+          // Check if the word matches
+          if (nextWord.text.toLowerCase() !== expressionWords[j]) {
+            isMatch = false;
+            break;
+          }
+        }
+
+        if (isMatch) {
+          matches.push({
+            songId: song.id,
+            songName: song.name,
+            paragraphIndex: currentWord.paragraphIndex,
+            rowIndex: currentWord.rowIndex,
+            startIndex: currentWord.inRowIndex,
+            endIndex: currentWord.inRowIndex + expressionWords.length - 1,
+            matchedText: expressionWords.join(' ')
+          });
+        }
       }
     }
+
     return matches;
+  }
+
+  async getAllExpressions(): Promise<any[]> {
+    const expressions = await this.expressionRepository.find();
+    return expressions.map(expr => ({
+      id: expr.id,
+      text: expr.text,
+      uniqueWordIds: expr.uniqueWordIds
+    }));
   }
 
   async getStatistics(): Promise<any> {

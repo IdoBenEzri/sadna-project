@@ -9,6 +9,9 @@ export class Expression {
   @Column()
   text: string;
 
+  @Column('text', { array: true })
+  uniqueWordIds: string[];
+
   @ManyToOne(() => UniqueWord, (uniqueWord) => uniqueWord.id)
   uniqueWord: UniqueWord;
 }
