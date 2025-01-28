@@ -5,6 +5,7 @@ import * as xml2js from 'xml2js';
 import * as fs from 'fs/promises';
 import { XMLParser, XMLBuilder } from 'fast-xml-parser';
 import { v4 as uuid } from 'uuid';
+import { Brackets } from 'typeorm';
 
 import { Song, Word, UniqueWord, GroupOfWords, Expression } from './entities';
 
@@ -38,63 +39,14 @@ export class AppService {
       const decodedData = Buffer.from(songData, 'base64').toString('utf-8');
       const lines = decodedData.split('\n');
       
-      // Handle metadata
-      song.name = lines[0];
-      song.authors = lines[1].split(',').map(a => a.trim());
-      song.composers = lines[2].split(',').map(c => c.trim());
-      song.singers = lines[3].split(',').map(s => s.trim());
+      // Handle metadata - store as comma-separated strings
+      song.name = lines[0].trim();
+      song.authors = lines[1].split(',').map(a => a.trim()).filter(Boolean);
+      song.composers = lines[2].split(',').map(c => c.trim()).filter(Boolean);
+      song.singers = lines[3].split(',').map(s => s.trim()).filter(Boolean);
+      
       const savedSong = await this.songRepository.save(song);
       await this.parseSongContent(decodedData, savedSong);
-      /*let currentParagraphIndex = 1;
-      let emptyLineCount = 0;
-      
-      // Process each line starting from line 4 (after metadata)
-      for (let rowIndex = 4; rowIndex < lines.length; rowIndex++) {
-        const line = lines[rowIndex].trim();
-        
-        if (!line) {
-          emptyLineCount++;
-          if (emptyLineCount === 2) {
-            currentParagraphIndex++;
-            emptyLineCount = 0;
-          }
-          continue;
-        }
-        emptyLineCount = 0;
-        
-        // Split by spaces and filter out commas and periods
-        const words = line
-          .replace(/[,.]/g, '') // Remove commas and periods
-          .split(/\s+/)
-          .filter(word => word.length > 0); // Remove empty strings
-        
-        for (let inRowIndex = 0; inRowIndex < words.length; inRowIndex++) {
-          const wordText = words[inRowIndex];
-          if (!wordText) continue;
-          
-          const word = this.wordRepository.create({
-            text: wordText.trim().toLowerCase(),
-            song: savedSong,
-            rowIndex: rowIndex - 3,
-            paragraphIndex: currentParagraphIndex,
-            inRowIndex: inRowIndex + 1,
-          });
-          
-          let uniqueWord = await this.uniqueWordRepository.findOne({
-            where: { text: wordText.trim().toLowerCase() }
-          });
-          
-          if (!uniqueWord) {
-            uniqueWord = this.uniqueWordRepository.create({
-              text: wordText.trim().toLowerCase()
-            });
-            await this.uniqueWordRepository.save(uniqueWord);
-          }
-          
-          word.uniqueWord = uniqueWord;
-          await this.wordRepository.save(word);
-        }
-      }*/
       
       savedSongIds.push(savedSong.id);
     }
@@ -147,84 +99,214 @@ export class AppService {
     return qb.getMany();
   }
 
-  async getSongs(query: { words?: string, composers?: string, singers?: string, authors?: string, name?: string, songId?: string }): Promise<any[]> {
-    const qb = this.songRepository.createQueryBuilder('song');
-    
-    // Always join with words to include them in the result
-    qb.leftJoin('song.words', 'word')
-      .addSelect(['word.text', 'word.rowIndex', 'word.paragraphIndex', 'word.inRowIndex'])
-      .orderBy('word.paragraphIndex', 'ASC')
-      .addOrderBy('word.rowIndex', 'ASC')
-      .addOrderBy('word.inRowIndex', 'ASC');
-    
-    // Add filtering conditions
-    if (query.words) {
-      // Create a subquery to filter songs but return all words
-      qb.andWhere(qb => {
-        const subQuery = this.songRepository
-          .createQueryBuilder('s')
-          .select('s.id')
-          .leftJoin('s.words', 'w')
-          .where('w.text IN (:...words)', {
-            words: query.words.split('.'),
-          });
-        return 'song.id IN (' + subQuery.getQuery() + ')';
-      })
-      .setParameter('words', query.words.split('.'));
+  async getSongs(query: { 
+    words?: string, 
+    composers?: string, 
+    singers?: string, 
+    authors?: string, 
+    name?: string, 
+    songId?: string,
+    expression?: string 
+  }): Promise<any[]> {
+    // Start building the query
+    let qb = this.songRepository.createQueryBuilder('song');
+
+    // If searching by words, ensure the song contains the word
+    if (query.words && query.words.trim()) {
+      qb.innerJoin('song.words', 'filterWord', 'LOWER(filterWord.text) = LOWER(:word)', { word: query.words.toLowerCase().trim() });
     }
-    
-    if (query.composers) {
-      const composers = query.composers.split('.').map(composer => composer.trim());
-      qb.andWhere(`ARRAY[:...composers] <@ string_to_array(song.composers::text, ',')`, {
-        composers: composers,
-      });
-    }
-    
-    if (query.singers) {
-      const singers = query.singers.split('.').map(singer => singer.trim());
-      qb.andWhere(`ARRAY[:...singers] <@ string_to_array(song.singers::text, ',')`, {
-        singers: singers,
-      });
-    }
-    
-    if (query.authors) {
-      const authors = query.authors.split('.').map(author => author.trim());
-      qb.andWhere(`ARRAY[:...authors] <@ string_to_array(song.authors::text, ',')`, {
-        authors: authors,
-      });
-    }
-    
+
+    // Apply metadata filters
     if (query.name) {
-      qb.andWhere('song.name = :name', {
-        name: query.name,
-      });
-    }
-    
-    if (query.songId) {
-      qb.andWhere('song.id = :songId', {
-        songId: query.songId,
+      qb.andWhere('LOWER(song.name) LIKE LOWER(:name)', { 
+        name: `%${query.name.toLowerCase().trim()}%` 
       });
     }
 
-    // Add distinct to avoid duplicate songs
-    qb.distinct(true);
+    // Use array operations for searching
+    if (query.composers) {
+      const composerTerms = query.composers.toLowerCase().split(',').map(c => c.trim()).filter(Boolean);
+      qb.andWhere(`
+        EXISTS (
+          SELECT 1 FROM unnest(song.composers) composer
+          WHERE LOWER(composer) IN (:...composerTerms)
+        )
+      `, { 
+        composerTerms: composerTerms
+      });
+    }
+
+    if (query.singers) {
+      const singerTerms = query.singers.toLowerCase().split(',').map(s => s.trim()).filter(Boolean);
+      qb.andWhere(`
+        EXISTS (
+          SELECT 1 FROM unnest(song.singers) singer
+          WHERE LOWER(singer) IN (:...singerTerms)
+        )
+      `, { 
+        singerTerms: singerTerms
+      });
+    }
+
+    if (query.authors) {
+      const authorTerms = query.authors.toLowerCase().split(',').map(a => a.trim()).filter(Boolean);
+      qb.andWhere(`
+        EXISTS (
+          SELECT 1 FROM unnest(song.authors) author
+          WHERE LOWER(author) IN (:...authorTerms)
+        )
+      `, { 
+        authorTerms: authorTerms
+      });
+    }
+
+    if (query.songId) {
+      qb.andWhere('song.id = :songId', { songId: query.songId });
+    }
+
+    // Include all words for the matched songs
+    qb.leftJoinAndSelect('song.words', 'word');
+
+    // Apply ordering
+    qb.orderBy('word.paragraphIndex', 'ASC')
+      .addOrderBy('word.rowIndex', 'ASC')
+      .addOrderBy('word.inRowIndex', 'ASC');
     
+    // Execute the query
     const songs = await qb.getMany();
-    
-    // Transform the results to include text organized by paragraphs
+
+    // If searching by expression, process accordingly
+    if (query.expression && query.expression !== 'null') {
+      const expressionWords = query.expression.toLowerCase().split(' ').filter(w => w.trim());
+      const filteredSongs = [];
+      console.log('Expression words:', expressionWords);
+      for (const song of songs) {
+        // Sort words by their position
+        const orderedWords = song.words.sort((a, b) => {
+          if (a.paragraphIndex !== b.paragraphIndex) {
+            return a.paragraphIndex - b.paragraphIndex;
+          }
+          if (a.rowIndex !== b.rowIndex) {
+            return a.rowIndex - b.rowIndex;
+          }
+          return a.inRowIndex - b.inRowIndex;
+        });
+
+        // Find expression matches
+        const matches = [];
+        for (let i = 0; i < orderedWords.length - expressionWords.length + 1; i++) {
+          let isMatch = true;
+          const currentWord = orderedWords[i];
+          const matchedPositions = [];
+
+          for (let j = 0; j < expressionWords.length; j++) {
+            const nextWord = orderedWords[i + j];
+            if (!nextWord || nextWord.text.toLowerCase() !== expressionWords[j]) {
+              isMatch = false;
+              break;
+            }
+            matchedPositions.push({
+              paragraphIndex: nextWord.paragraphIndex,
+              rowIndex: nextWord.rowIndex,
+              inRowIndex: nextWord.inRowIndex
+            });
+          }
+
+          if (isMatch) {
+            matches.push({
+              positions: matchedPositions,
+              matchedText: expressionWords.join(' '),
+              startPosition: {
+                paragraphIndex: currentWord.paragraphIndex,
+                rowIndex: currentWord.rowIndex,
+                inRowIndex: currentWord.inRowIndex
+              },
+              endPosition: {
+                paragraphIndex: orderedWords[i + expressionWords.length - 1].paragraphIndex,
+                rowIndex: orderedWords[i + expressionWords.length - 1].rowIndex,
+                inRowIndex: orderedWords[i + expressionWords.length - 1].inRowIndex
+              }
+            });
+          }
+        }
+
+        if (matches.length > 0) {
+          // Organize words into paragraphs and rows for display
+          const paragraphs: Record<number, Record<number, string[]>> = {};
+          orderedWords.forEach(word => {
+            if (!paragraphs[word.paragraphIndex]) {
+              paragraphs[word.paragraphIndex] = {};
+            }
+            if (!paragraphs[word.paragraphIndex][word.rowIndex]) {
+              paragraphs[word.paragraphIndex][word.rowIndex] = [];
+            }
+            paragraphs[word.paragraphIndex][word.rowIndex].push(word.text);
+          });
+
+          filteredSongs.push({
+            id: song.id,
+            name: song.name,
+            filename: song.filename,
+            composers: song.composers,
+            singers: song.singers,
+            authors: song.authors,
+            matches: matches,
+            text: Object.entries(paragraphs)
+              .sort(([a], [b]) => Number(a) - Number(b))
+              .map(([_, rows]) => 
+                Object.entries(rows)
+                  .sort(([a], [b]) => Number(a) - Number(b))
+                  .map(([_, words]) => words.join(' '))
+                  .join('\n')
+              )
+              .join('\n\n')
+          });
+        }
+      }
+      return filteredSongs;
+    }
+
+    // Format the songs with all their words
     return songs.map(song => {
-      const paragraphs = {};
+      if (!song.words || song.words.length === 0) {
+        return {
+          id: song.id,
+          name: song.name,
+          filename: song.filename,
+          composers: song.composers,
+          singers: song.singers,
+          authors: song.authors,
+          text: ''
+        };
+      }
+
+      const paragraphs: Record<number, Record<number, string[]>> = {};
       song.words.forEach(word => {
         if (!paragraphs[word.paragraphIndex]) {
-          paragraphs[word.paragraphIndex] = [];
+          paragraphs[word.paragraphIndex] = {};
         }
-        paragraphs[word.paragraphIndex].push(word.text);
+        if (!paragraphs[word.paragraphIndex][word.rowIndex]) {
+          paragraphs[word.paragraphIndex][word.rowIndex] = [];
+        }
+        paragraphs[word.paragraphIndex][word.rowIndex].push(word.text);
       });
       
       return {
-        ...song,
-        text: Object.values(paragraphs).map((paragraph: string[]) => paragraph.join(' '))
-          ?.join('\n\n')
+        id: song.id,
+        name: song.name,
+        filename: song.filename,
+        composers: song.composers,
+        singers: song.singers,
+        authors: song.authors,
+        text: Object.entries(paragraphs)
+          .sort(([a], [b]) => Number(a) - Number(b))
+          .map(([_, rows]) => 
+            Object.entries(rows)
+              .sort(([a], [b]) => Number(a) - Number(b))
+              .map(([_, words]) => words.join(' '))
+              .join('\n')
+          )
+          .join('\n\n')
       };
     });
   }
@@ -315,6 +397,17 @@ export class AppService {
     });
   }
 
+  async getUniqueWords(): Promise<string[]> {
+    const uniqueWords = await this.uniqueWordRepository.find();
+    return uniqueWords.map(word => word.text);
+  }
+
+  async getGroupWords(groupId: string): Promise<string[]> {
+    const group = await this.groupOfWordsRepository.findOne({ where: { groupId } });
+    if (!group) throw new Error('Group not found');
+    return group.uniqueWord.words.map(word => word.text);
+  }
+
   async createGroupOfWords(name: string, words: string[]): Promise<void> {
     const groupId =  uuid();
 
@@ -327,7 +420,7 @@ export class AppService {
       }
 
       const groupOfWords = this.groupOfWordsRepository.create({
-        name,
+      name,
         uniqueWord,
         groupId: groupId,
       });
@@ -337,61 +430,215 @@ export class AppService {
     return groupId;
   }
 
+  async addWordToGroup(groupId: string, words: string[]): Promise<void> {
+    console.log('Adding words to group:', { groupId, words });
+    for (const word of words) {
+      const uniqueWord = await this.uniqueWordRepository.findOne({ where: { text: word.trim().toLowerCase() } });
+      if (!uniqueWord) throw new Error('Unique word not found');
+      const group = await this.groupOfWordsRepository.findOne({ where: { groupId } });
+      if (!group) throw new Error('Group not found');
+      const existingGroup = await this.groupOfWordsRepository.findOne({ where: { uniqueWord: uniqueWord, groupId: groupId } });
+      if (!existingGroup) {
+        const groupOfWords = this.groupOfWordsRepository.create({
+          name: group.name,
+          uniqueWord: uniqueWord,
+          groupId: groupId,
+        });
+        await this.groupOfWordsRepository.save(groupOfWords);
+      }
+    }
+  }
+
+  async getAllGroupWords(): Promise<any[]> {
+    const groups = await this.groupOfWordsRepository
+      .createQueryBuilder('group')
+      .leftJoinAndSelect('group.uniqueWord', 'uniqueWord')
+      .select([
+        'group.groupId',
+        'group.name',
+        'array_agg(uniqueWord.text) as words'
+      ])
+      .groupBy('group.groupId, group.name')
+      .getRawMany();
+    console.log('Groups:', groups);
+    return groups.map(group => ({
+      groupId: group.group_groupId,
+      name: group.group_name,
+      words: group.words || []
+    }));
+  }
+
   async getGroups(): Promise<string[]> {
     const groups = await this.groupOfWordsRepository.find();
     return groups.map((group) => group.name);
   }
 
-  async getGroupIndexes(groupId: string): Promise<any> {
+  async getGroupIndexes(groupId: string): Promise<any[]> {
     const wordsInGroup = await this.groupOfWordsRepository.find({
       where: { groupId },
       relations: ['uniqueWord'],
     });
     if (!wordsInGroup.length) throw new Error('Group not found');
 
-    const indexes = {};
+    const results = [];
     for (const wordInGroup of wordsInGroup) {
-      const words = await this.wordRepository.find({
-      where: { uniqueWord: wordInGroup.uniqueWord },
+    const words = await this.wordRepository.find({
+        where: { uniqueWord: wordInGroup.uniqueWord },
       relations: ['song'],
-      });
+    });
 
-      for (const word of words) {
-      if (!indexes[word.text]) {
-        indexes[word.text] = [];
-      }
-      indexes[word.text].push({
+    for (const word of words) {
+        results.push({
+          word: word.text,
         songName: word.song.name,
+          songId: word.song.id,
         inlineIndex: word.inRowIndex,
         rowIndex: word.rowIndex,
         paragraphIndex: word.paragraphIndex,
       });
-      }
     }
-    return indexes;
+    }
+    return results;
   }
 
   async addExpression(expression: string): Promise<void> {
-    const expr = this.expressionRepository.create({ text: expression });
+    // Split expression into words and clean them
+    const words = expression.toLowerCase().split(' ').filter(w => w.trim());
+    
+    // Find unique words and collect their IDs
+    const uniqueWordIds = [];
+    for (const word of words) {
+      const uniqueWord = await this.uniqueWordRepository.findOne({
+        where: { text: word.trim() }
+      });
+      if (uniqueWord) {
+        uniqueWordIds.push(uniqueWord.id);
+      }
+    }
+
+    // Create and save the expression with the unique word IDs
+    const expr = this.expressionRepository.create({ 
+      text: expression,
+      uniqueWordIds: uniqueWordIds 
+    });
     await this.expressionRepository.save(expr);
   }
 
-  async searchExpression(expression: string, songId: string): Promise<any[]> {
-    const song = await this.songRepository.findOne({
-      where: { id: songId },
-      relations: ['words'],
+  async searchExpression(expression: string): Promise<any[]> {
+    console.log('Searching for expression:', expression);
+    
+    // Get all songs with their words
+    const songs = await this.songRepository.find({
+        relations: ['words']
     });
-    if (!song) throw new Error('Song not found');
+    if (!songs.length) throw new Error('No songs found');
 
     const matches = [];
-    const expressionWords = expression.split(' ');
-    for (let i = 0; i < song.words.length - expressionWords.length + 1; i++) {
-      const segment = song.words.slice(i, i + expressionWords.length);
-      if (segment.map((word) => word.text).join(' ') === expression) {
-        matches.push({ index: i +1 });
-      }
+    const expressionWords = expression.toLowerCase().split(' ');
+    console.log('Expression words:', expressionWords);
+
+    // Search through each song
+    for (const song of songs) {
+        console.log(`\nChecking song: ${song.name}`);
+        
+        // Get all words ordered by their position
+        const orderedWords = song.words.sort((a, b) => {
+            if (a.paragraphIndex !== b.paragraphIndex) {
+                return a.paragraphIndex - b.paragraphIndex;
+            }
+            if (a.rowIndex !== b.rowIndex) {
+                return a.rowIndex - b.rowIndex;
+            }
+            return a.inRowIndex - b.inRowIndex;
+        });
+
+        console.log('Ordered words:', orderedWords.map(w => ({
+            text: w.text,
+            para: w.paragraphIndex,
+            row: w.rowIndex,
+            inRow: w.inRowIndex
+        })));
+
+        // Iterate through words in the song
+        for (let i = 0; i < orderedWords.length - expressionWords.length + 1; i++) {
+            const currentWord = orderedWords[i];
+            let isMatch = true;
+            let matchDetails = [];
+
+            // Check if we're at valid boundaries (same row and paragraph)
+            for (let j = 0; j < expressionWords.length; j++) {
+                const nextWord = orderedWords[i + j];
+                
+                matchDetails.push({
+                    expected: expressionWords[j],
+                    found: nextWord?.text.toLowerCase(),
+                    para: nextWord?.paragraphIndex,
+                    row: nextWord?.rowIndex,
+                    inRow: nextWord?.inRowIndex
+                });
+
+                // Check if words are in the same paragraph and row
+                if (!nextWord || 
+                    nextWord.paragraphIndex !== currentWord.paragraphIndex || 
+                    nextWord.rowIndex !== currentWord.rowIndex || 
+                    nextWord.inRowIndex !== (currentWord.inRowIndex + j)) {
+                    console.log('Position mismatch:', {
+                        current: {
+                            para: currentWord.paragraphIndex,
+                            row: currentWord.rowIndex,
+                            inRow: currentWord.inRowIndex
+                        },
+                        next: nextWord ? {
+                            para: nextWord.paragraphIndex,
+                            row: nextWord.rowIndex,
+                            inRow: nextWord.inRowIndex
+                        } : 'no word'
+                    });
+                    isMatch = false;
+                    break;
+                }
+
+                // Check if the word matches (case insensitive)
+                if (nextWord.text.toLowerCase() !== expressionWords[j]) {
+                    console.log('Word mismatch:', {
+                        expected: expressionWords[j],
+                        found: nextWord.text.toLowerCase()
+                    });
+                    isMatch = false;
+                    break;
+                }
+            }
+
+            if (isMatch) {
+                console.log('Found match!', matchDetails);
+                
+                matches.push({
+                    songId: song.id,
+                    songName: song.name,
+                    paragraphIndex: currentWord.paragraphIndex,
+                    rowIndex: currentWord.rowIndex,
+                    startIndex: currentWord.inRowIndex,
+                    endIndex: currentWord.inRowIndex + expressionWords.length - 1,
+                    matchedText: orderedWords
+                        .slice(i, i + expressionWords.length)
+                        .map(w => w.text)
+                        .join(' ')
+                });
+            }
+        }
     }
+
+    console.log(`Found ${matches.length} matches for expression "${expression}"`);
     return matches;
+  }
+
+  async getAllExpressions(): Promise<any[]> {
+    const expressions = await this.expressionRepository.find();
+    return expressions.map(expr => ({
+      id: expr.id,
+      text: expr.text,
+      uniqueWordIds: expr.uniqueWordIds
+    }));
   }
 
   async getStatistics(): Promise<any> {
@@ -483,139 +730,186 @@ export class AppService {
   }
 
   async backupToXml(filepath: string): Promise<void> {
-    // Fetch all data from database
+    console.log('Starting backup process...');
+    
+    // Fetch all data from database with complete relations
     const songs = await this.songRepository.find({
-      relations: ['words', 'words.uniqueWord']
+        relations: ['words', 'words.uniqueWord']
     });
+    console.log(`Found ${songs.length} songs to backup`);
+    
+    const uniqueWords = await this.uniqueWordRepository.find();
+    console.log(`Found ${uniqueWords.length} unique words to backup`);
+    
     const groups = await this.groupOfWordsRepository.find({
-      relations: ['uniqueWord']
+        relations: ['uniqueWord']
     });
+    console.log(`Found ${groups.length} groups to backup`);
+    
     const expressions = await this.expressionRepository.find();
+    console.log(`Found ${expressions.length} expressions to backup`);
 
     // Create XML structure
     const backup = {
-      database: {
-        songs: songs.map(song => ({
-          id: song.id,
-          name: song.name,
-          filename: song.filename,
-          authors: song.authors,
-          composers: song.composers,
-          singers: song.singers,
-          words: song.words.map(word => ({
-            id: word.id,
-            text: word.text,
-            rowIndex: word.rowIndex,
-            paragraphIndex: word.paragraphIndex,
-            inRowIndex: word.inRowIndex,
-            uniqueWord: {
-              id: word.uniqueWord.id,
-              text: word.uniqueWord.text
-            }
-          }))
-        })),
-        groups: groups.map(group => ({
-          id: group.groupId,
-          name: group.name,
-          uniqueWord: group.uniqueWord ? {
-            id: group.uniqueWord.id,
-            text: group.uniqueWord.text
-          } : null
-        })),
-        expressions: expressions.map(expr => ({
-          id: expr.id,
-          text: expr.text
-        }))
-      }
+        database: {
+            uniqueWords: uniqueWords.map(uniqueWord => ({
+                id: uniqueWord.id,
+                text: uniqueWord.text
+            })),
+            songs: songs.map(song => ({
+                id: song.id,
+                name: song.name,
+                filename: song.filename,
+                authors: song.authors,
+                composers: song.composers,
+                singers: song.singers,
+                words: song.words.map(word => ({
+                    id: word.id,
+                    text: word.text,
+                    rowIndex: word.rowIndex,
+                    paragraphIndex: word.paragraphIndex,
+                    inRowIndex: word.inRowIndex,
+                    uniqueWordId: word.uniqueWord?.id // Store the reference
+                }))
+            })),
+            groups: groups.map(group => ({
+                id: group.groupId,
+                name: group.name,
+                uniqueWordId: group.uniqueWord?.id
+            })),
+            expressions: expressions.map(expr => ({
+                id: expr.id,
+                text: expr.text,
+                uniqueWordIds: expr.uniqueWordIds
+            }))
+        }
     };
 
     // Convert to XML and save
-    const builder = new xml2js.Builder();
+    const builder = new xml2js.Builder({
+        renderOpts: { pretty: true, indent: '  ' },
+        xmldec: { version: '1.0', encoding: 'UTF-8' }
+    });
     const xml = builder.buildObject(backup);
+    
+    console.log('XML structure created, writing to file...');
     await fs.writeFile(filepath, xml);
+    console.log(`Backup completed and saved to ${filepath}`);
   }
 
   async restoreFromXml(filepath: string): Promise<void> {
+    console.log('Starting restore process...');
+    
     // Read and parse XML file
     const xml = await fs.readFile(filepath, 'utf-8');
     const parser = new xml2js.Parser({ explicitArray: false });
     const data = await parser.parseStringPromise(xml);
-
+    
     // Clear existing data in correct order
+    console.log('Clearing existing data...');
     await this.wordRepository.delete({});
     await this.groupOfWordsRepository.delete({});
     await this.expressionRepository.delete({});
     await this.uniqueWordRepository.delete({});
     await this.songRepository.delete({});
 
-    // Create a map to track unique words we've already created
+    // Create a map to store unique words
     const uniqueWordsMap = new Map<string, UniqueWord>();
 
-    // Restore data
-    for (const songData of data.database.songs) {
-      const song = this.songRepository.create({
-        id: songData.id,
-        name: songData.name,
-        filename: songData.filename,
-        authors: songData.authors,
-        composers: songData.composers,
-        singers: songData.singers
-      });
-      await this.songRepository.save(song);
+    // First, collect and create all unique words from the songs
+    const songs = Array.isArray(data?.database?.songs) 
+        ? data.database.songs 
+        : [data.database.songs];
 
-      for (const wordData of songData.words) {
-        // Check if we already created this unique word
-        let uniqueWord = uniqueWordsMap.get(wordData.uniqueWord.text);
+    console.log(`Found ${songs.length} songs in XML`);
 
-        if (!uniqueWord) {
-          // Create new unique word
-          uniqueWord = this.uniqueWordRepository.create({
-            id: wordData.uniqueWord.id,
-            text: wordData.uniqueWord.text
-          });
-          await this.uniqueWordRepository.save(uniqueWord);
-          uniqueWordsMap.set(wordData.uniqueWord.text, uniqueWord);
+    // Process each song's words to collect unique words
+    for (const songData of songs) {
+        const words = Array.isArray(songData.words) 
+            ? songData.words 
+            : [songData.words];
+        
+        for (const wordData of words) {
+            if (wordData.uniqueWord) {
+                const uniqueWordId = parseInt(wordData.uniqueWord.id);
+                if (!uniqueWordsMap.has(String(uniqueWordId))) {
+                    const uniqueWord = this.uniqueWordRepository.create({
+                        id: uniqueWordId,
+                        text: wordData.uniqueWord.text
+                    });
+                    await this.uniqueWordRepository.save(uniqueWord);
+                    uniqueWordsMap.set(String(uniqueWordId), uniqueWord);
+                }
+            }
         }
-
-        // Create word
-        const word = this.wordRepository.create({
-          id: wordData.id,
-          text: wordData.text,
-          rowIndex: wordData.rowIndex,
-          paragraphIndex: wordData.paragraphIndex,
-          inRowIndex: wordData.inRowIndex,
-          song: song,
-          uniqueWord: uniqueWord
-        });
-        await this.wordRepository.save(word);
-      }
     }
 
-    // Restore groups
-    if (data.database.groups) {
-      for (const groupData of data.database.groups) {
-        const uniqueWord = groupData.uniqueWord ? 
-          uniqueWordsMap.get(groupData.uniqueWord.text) : null;
+    console.log(`Created ${uniqueWordsMap.size} unique words`);
 
-        const group = this.groupOfWordsRepository.create({
-          groupId: groupData.id,
-          name: groupData.name,
-          uniqueWord: uniqueWord
-        });
-        await this.groupOfWordsRepository.save(group);
-      }
+    // Now restore songs and their words
+    for (const songData of songs) {
+        try {
+            // Convert string fields to arrays
+            const authors = Array.isArray(songData.authors) 
+                ? songData.authors 
+                : songData.authors ? [songData.authors] 
+                : [];
+            
+            const composers = Array.isArray(songData.composers) 
+                ? songData.composers 
+                : songData.composers ? [songData.composers] 
+                : [];
+            
+            const singers = Array.isArray(songData.singers) 
+                ? songData.singers 
+                : songData.singers ? [songData.singers] 
+                : [];
+
+            const song = this.songRepository.create({
+                id: songData.id,
+                name: songData.name,
+                filename: songData.filename,
+                authors: authors,
+                composers: composers,
+                singers: singers
+            });
+            
+            const savedSong = await this.songRepository.save(song);
+            console.log(`Restored song: ${savedSong.name}`);
+
+            // Process words
+            const words = Array.isArray(songData.words) 
+                ? songData.words 
+                : [songData.words];
+            
+            for (const wordData of words) {
+                const uniqueWordId = parseInt(wordData.uniqueWord.id);
+                const uniqueWord = uniqueWordsMap.get(String(uniqueWordId));
+
+                if (!uniqueWord) {
+                    console.warn(`UniqueWord not found for word: ${wordData.text} with ID: ${uniqueWordId}`);
+                    continue;
+                }
+
+                const word = this.wordRepository.create({
+                    id: wordData.id,
+                    text: wordData.text,
+                    rowIndex: parseInt(wordData.rowIndex),
+                    paragraphIndex: parseInt(wordData.paragraphIndex),
+                    inRowIndex: parseInt(wordData.inRowIndex),
+                    song: savedSong,
+                    uniqueWord: uniqueWord
+                });
+
+                await this.wordRepository.save(word);
+            }
+        } catch (error) {
+            console.error('Error restoring song:', error);
+            console.error('Song data:', songData);
+        }
     }
 
-    // Restore expressions
-    if (data.database.expressions) {
-      for (const exprData of data.database.expressions) {
-        const expression = this.expressionRepository.create({
-          id: exprData.id,
-          text: exprData.text
-        });
-        await this.expressionRepository.save(expression);
-      }
-    }
+    console.log('Restore process completed');
   }
 
   async exportToXml(): Promise<string> {

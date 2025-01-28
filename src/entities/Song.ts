@@ -1,29 +1,41 @@
 import { Entity, PrimaryGeneratedColumn, Column, OneToMany } from 'typeorm';
 import { Word } from './Word';
-import { UniqueWord } from './UniqueWord';
 
 @Entity()
 export class Song {
-  @PrimaryGeneratedColumn()
+  @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column()
-  filename: string;
-
-  @Column()
+  @Column({ nullable: false })
   name: string;
 
-  @Column('simple-array')
-  authors: string[]; // Stores as a comma-separated string
+  @Column({ nullable: false })
+  filename: string;
 
-  @Column('simple-array')
-  composers: string[]; // Stores as a comma-separated string
+  @Column('text', { array: true, nullable: false, default: [] })
+  authors: string[];
 
-  @Column('simple-array')
-  singers: string[]; // Stores as a comma-separated string
+  @Column('text', { array: true, nullable: false, default: [] })
+  composers: string[];
 
-  @OneToMany(() => Word, (word) => word.song)
+  @Column('text', { array: true, nullable: false, default: [] })
+  singers: string[];
+
+  @OneToMany(() => Word, word => word.song, {
+    cascade: true,
+    onDelete: 'CASCADE'
+  })
   words: Word[];
 
-  uniqueWords: UniqueWord[];
+  getAuthorsArray(): string[] {
+    return this.authors ? this.authors.map(a => a.trim()) : [];
+  }
+
+  getComposersArray(): string[] {
+    return this.composers ? this.composers.map(c => c.trim()) : [];
+  }
+
+  getSingersArray(): string[] {
+    return this.singers ? this.singers.map(s => s.trim()) : [];
+  }
 }

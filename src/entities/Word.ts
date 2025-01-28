@@ -7,21 +7,27 @@ export class Word {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column()
+  @Column({ nullable: false })
   text: string;
 
-  @Column()
+  @Column({ nullable: false })
   rowIndex: number;
 
-  @Column()
+  @Column({ nullable: false })
   paragraphIndex: number;
 
-  @Column()
+  @Column({ nullable: false })
   inRowIndex: number;
 
-  @ManyToOne(() => Song, song => song.words)
+  @ManyToOne(() => Song, song => song.words, {
+    nullable: false,
+    onDelete: 'CASCADE'
+  })
   song: Song;
 
-  @ManyToOne(() => UniqueWord)
+  @ManyToOne(() => UniqueWord, {
+    nullable: false,
+    onDelete: 'CASCADE'
+  })
   uniqueWord: UniqueWord;
 }

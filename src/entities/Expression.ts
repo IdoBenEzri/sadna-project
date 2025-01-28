@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, ManyToOne } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, ManyToMany } from 'typeorm';
 import { UniqueWord } from './UniqueWord';
 
 @Entity()
@@ -9,6 +9,9 @@ export class Expression {
   @Column()
   text: string;
 
-  @ManyToOne(() => UniqueWord, (uniqueWord) => uniqueWord.id)
-  uniqueWord: UniqueWord;
+  @Column('text', { array: true })
+  uniqueWordIds: string[];
+
+  @ManyToMany(() => UniqueWord, (uniqueWord) => uniqueWord.id)
+  uniqueWords: UniqueWord[];
 }

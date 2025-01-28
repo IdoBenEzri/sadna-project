@@ -10,12 +10,12 @@ import { GroupOfWords } from './GroupOfWords';
 @Entity()
 export class UniqueWord {
   @PrimaryGeneratedColumn()
-  id: string;
+  id: number;
 
-  @Column({ unique: true })
+  @Column({ nullable: false, unique: true })
   text: string;
 
-  @OneToMany(() => Word, (word) => word.uniqueWord)
+  @OneToMany(() => Word, word => word.uniqueWord)
   words: Word[];
 
   @OneToMany(() => GroupOfWords, (groupOfWords) => groupOfWords.uniqueWord)
