@@ -6,6 +6,7 @@ import * as fs from 'fs/promises';
 import { XMLParser, XMLBuilder } from 'fast-xml-parser';
 import { v4 as uuid } from 'uuid';
 import { Brackets } from 'typeorm';
+import { ILike } from 'typeorm';
 
 import { Song, Word, UniqueWord, GroupOfWords, Expression } from './entities';
 
@@ -527,15 +528,29 @@ export class AppService {
   async searchExpression(expression: string): Promise<any[]> {
     console.log('Searching for expression:', expression);
     
+    // First, find the UniqueWords for the expression
+    const expressionWords = expression.toLowerCase().split(' ');
+    const uniqueWords = await this.uniqueWordRepository.find({
+        where: expressionWords.map(word => ({
+            text: ILike(word)
+        }))
+    });
+
+    console.log('Found UniqueWords:', uniqueWords.map(w => ({ id: w.id, text: w.text })));
+
+    // Verify we found all words in the expression
+    if (uniqueWords.length !== expressionWords.length) {
+        console.log('Not all words found in UniqueWords');
+        return [];
+    }
+
     // Get all songs with their words
     const songs = await this.songRepository.find({
-        relations: ['words']
+        relations: ['words', 'words.uniqueWord']
     });
     if (!songs.length) throw new Error('No songs found');
 
     const matches = [];
-    const expressionWords = expression.toLowerCase().split(' ');
-    console.log('Expression words:', expressionWords);
 
     // Search through each song
     for (const song of songs) {
@@ -552,57 +567,34 @@ export class AppService {
             return a.inRowIndex - b.inRowIndex;
         });
 
-        console.log('Ordered words:', orderedWords.map(w => ({
-            text: w.text,
-            para: w.paragraphIndex,
-            row: w.rowIndex,
-            inRow: w.inRowIndex
-        })));
-
         // Iterate through words in the song
-        for (let i = 0; i < orderedWords.length - expressionWords.length + 1; i++) {
+        for (let i = 0; i < orderedWords.length - uniqueWords.length + 1; i++) {
             const currentWord = orderedWords[i];
             let isMatch = true;
             let matchDetails = [];
 
-            // Check if we're at valid boundaries (same row and paragraph)
-            for (let j = 0; j < expressionWords.length; j++) {
+            // Check if we're at valid boundaries
+            for (let j = 0; j < uniqueWords.length; j++) {
                 const nextWord = orderedWords[i + j];
                 
                 matchDetails.push({
-                    expected: expressionWords[j],
-                    found: nextWord?.text.toLowerCase(),
+                    expectedId: uniqueWords[j].id,
+                    expectedText: uniqueWords[j].text,
+                    foundId: nextWord?.uniqueWord?.id,
+                    foundText: nextWord?.text,
                     para: nextWord?.paragraphIndex,
                     row: nextWord?.rowIndex,
                     inRow: nextWord?.inRowIndex
                 });
 
-                // Check if words are in the same paragraph and row
-                if (!nextWord || 
-                    nextWord.paragraphIndex !== currentWord.paragraphIndex || 
-                    nextWord.rowIndex !== currentWord.rowIndex || 
-                    nextWord.inRowIndex !== (currentWord.inRowIndex + j)) {
-                    console.log('Position mismatch:', {
-                        current: {
-                            para: currentWord.paragraphIndex,
-                            row: currentWord.rowIndex,
-                            inRow: currentWord.inRowIndex
-                        },
-                        next: nextWord ? {
-                            para: nextWord.paragraphIndex,
-                            row: nextWord.rowIndex,
-                            inRow: nextWord.inRowIndex
-                        } : 'no word'
-                    });
-                    isMatch = false;
-                    break;
-                }
-
-                // Check if the word matches (case insensitive)
-                if (nextWord.text.toLowerCase() !== expressionWords[j]) {
+                // Check if words exist and match UniqueWord IDs
+                if (!nextWord || !nextWord.uniqueWord || 
+                    nextWord.uniqueWord.id !== uniqueWords[j].id) {
                     console.log('Word mismatch:', {
-                        expected: expressionWords[j],
-                        found: nextWord.text.toLowerCase()
+                        expected: uniqueWords[j].text,
+                        expectedId: uniqueWords[j].id,
+                        found: nextWord?.text,
+                        foundId: nextWord?.uniqueWord?.id
                     });
                     isMatch = false;
                     break;
@@ -618,11 +610,14 @@ export class AppService {
                     paragraphIndex: currentWord.paragraphIndex,
                     rowIndex: currentWord.rowIndex,
                     startIndex: currentWord.inRowIndex,
-                    endIndex: currentWord.inRowIndex + expressionWords.length - 1,
+                    endIndex: currentWord.inRowIndex + uniqueWords.length - 1,
                     matchedText: orderedWords
-                        .slice(i, i + expressionWords.length)
+                        .slice(i, i + uniqueWords.length)
                         .map(w => w.text)
-                        .join(' ')
+                        .join(' '),
+                    matchedIds: orderedWords
+                        .slice(i, i + uniqueWords.length)
+                        .map(w => w.uniqueWord.id)
                 });
             }
         }
@@ -733,13 +728,16 @@ export class AppService {
     console.log('Starting backup process...');
     
     // Fetch all data from database with complete relations
-    const songs = await this.songRepository.find({
-        relations: ['words', 'words.uniqueWord']
-    });
-    console.log(`Found ${songs.length} songs to backup`);
-    
     const uniqueWords = await this.uniqueWordRepository.find();
     console.log(`Found ${uniqueWords.length} unique words to backup`);
+    
+    const songs = await this.songRepository.find();
+    console.log(`Found ${songs.length} songs to backup`);
+    
+    const words = await this.wordRepository.find({
+        relations: ['song', 'uniqueWord']
+    });
+    console.log(`Found ${words.length} words to backup`);
     
     const groups = await this.groupOfWordsRepository.find({
         relations: ['uniqueWord']
@@ -762,18 +760,20 @@ export class AppService {
                 filename: song.filename,
                 authors: song.authors,
                 composers: song.composers,
-                singers: song.singers,
-                words: song.words.map(word => ({
-                    id: word.id,
-                    text: word.text,
-                    rowIndex: word.rowIndex,
-                    paragraphIndex: word.paragraphIndex,
-                    inRowIndex: word.inRowIndex,
-                    uniqueWordId: word.uniqueWord?.id // Store the reference
-                }))
+                singers: song.singers
+            })),
+            words: words.map(word => ({
+                id: word.id,
+                text: word.text,
+                rowIndex: word.rowIndex,
+                paragraphIndex: word.paragraphIndex,
+                inRowIndex: word.inRowIndex,
+                songId: word.song.id,
+                uniqueWordId: word.uniqueWord.id
             })),
             groups: groups.map(group => ({
-                id: group.groupId,
+                id: group.id,
+                groupId: group.groupId,
                 name: group.name,
                 uniqueWordId: group.uniqueWord?.id
             })),
@@ -794,7 +794,7 @@ export class AppService {
     
     console.log('XML structure created, writing to file...');
     await fs.writeFile(filepath, xml);
-    console.log(`Backup completed and saved to ${filepath}`);
+    console.log('Backup completed successfully');
   }
 
   async restoreFromXml(filepath: string): Promise<void> {
@@ -805,7 +805,7 @@ export class AppService {
     const parser = new xml2js.Parser({ explicitArray: false });
     const data = await parser.parseStringPromise(xml);
     
-    // Clear existing data in correct order
+    // Clear existing data in correct order (due to foreign key constraints)
     console.log('Clearing existing data...');
     await this.wordRepository.delete({});
     await this.groupOfWordsRepository.delete({});
@@ -813,103 +813,145 @@ export class AppService {
     await this.uniqueWordRepository.delete({});
     await this.songRepository.delete({});
 
-    // Create a map to store unique words
+    // Disable auto-increment sequence for the restore process
+    await this.uniqueWordRepository.query('ALTER SEQUENCE unique_word_id_seq RESTART WITH 1');
+    await this.wordRepository.query('ALTER SEQUENCE word_id_seq RESTART WITH 1');
+
+    // Maps to store references
     const uniqueWordsMap = new Map<string, UniqueWord>();
+    const songsMap = new Map<string, Song>();
 
-    // First, collect and create all unique words from the songs
-    const songs = Array.isArray(data?.database?.songs) 
-        ? data.database.songs 
-        : [data.database.songs];
+    try {
+        // 1. Restore UniqueWords first
+        console.log('Restoring unique words...');
+        const uniqueWords = Array.isArray(data.database.uniqueWords) 
+            ? data.database.uniqueWords 
+            : [data.database.uniqueWords];
 
-    console.log(`Found ${songs.length} songs in XML`);
-
-    // Process each song's words to collect unique words
-    for (const songData of songs) {
-        const words = Array.isArray(songData.words) 
-            ? songData.words 
-            : [songData.words];
-        
-        for (const wordData of words) {
-            if (wordData.uniqueWord) {
-                const uniqueWordId = parseInt(wordData.uniqueWord.id);
-                if (!uniqueWordsMap.has(String(uniqueWordId))) {
-                    const uniqueWord = this.uniqueWordRepository.create({
-                        id: uniqueWordId,
-                        text: wordData.uniqueWord.text
-                    });
-                    await this.uniqueWordRepository.save(uniqueWord);
-                    uniqueWordsMap.set(String(uniqueWordId), uniqueWord);
-                }
-            }
+        for (const uniqueWordData of uniqueWords) {
+            // Create the unique word with the exact ID from backup
+            await this.uniqueWordRepository.query(
+                'INSERT INTO unique_word (id, text) VALUES ($1, $2)',
+                [uniqueWordData.id, uniqueWordData.text]
+            );
+            
+            // Fetch the saved unique word
+            const savedUniqueWord = await this.uniqueWordRepository.findOne({
+                where: { id: parseInt(uniqueWordData.id) }
+            });
+            
+            uniqueWordsMap.set(String(savedUniqueWord.id), savedUniqueWord);
         }
-    }
 
-    console.log(`Created ${uniqueWordsMap.size} unique words`);
+        // Update the sequence to the max ID
+        await this.uniqueWordRepository.query(`
+            SELECT setval('unique_word_id_seq', COALESCE((SELECT MAX(id) FROM unique_word), 1));
+        `);
 
-    // Now restore songs and their words
-    for (const songData of songs) {
-        try {
-            // Convert string fields to arrays
-            const authors = Array.isArray(songData.authors) 
-                ? songData.authors 
-                : songData.authors ? [songData.authors] 
-                : [];
-            
-            const composers = Array.isArray(songData.composers) 
-                ? songData.composers 
-                : songData.composers ? [songData.composers] 
-                : [];
-            
-            const singers = Array.isArray(songData.singers) 
-                ? songData.singers 
-                : songData.singers ? [songData.singers] 
-                : [];
+        // 2. Restore Songs
+        console.log('Restoring songs...');
+        const songs = Array.isArray(data.database.songs) 
+            ? data.database.songs 
+            : [data.database.songs];
 
+        for (const songData of songs) {
             const song = this.songRepository.create({
                 id: songData.id,
                 name: songData.name,
                 filename: songData.filename,
-                authors: authors,
-                composers: composers,
-                singers: singers
+                authors: Array.isArray(songData.authors) ? songData.authors : [songData.authors],
+                composers: Array.isArray(songData.composers) ? songData.composers : [songData.composers],
+                singers: Array.isArray(songData.singers) ? songData.singers : [songData.singers]
             });
-            
             const savedSong = await this.songRepository.save(song);
-            console.log(`Restored song: ${savedSong.name}`);
+            songsMap.set(String(savedSong.id), savedSong);
+        }
 
-            // Process words
-            const words = Array.isArray(songData.words) 
-                ? songData.words 
-                : [songData.words];
-            
-            for (const wordData of words) {
-                const uniqueWordId = parseInt(wordData.uniqueWord.id);
-                const uniqueWord = uniqueWordsMap.get(String(uniqueWordId));
+        // 3. Restore Words
+        console.log('Restoring words...');
+        const words = Array.isArray(data.database.words) 
+            ? data.database.words 
+            : [data.database.words];
 
+        for (const wordData of words) {
+            const song = songsMap.get(String(wordData.songId));
+            const uniqueWord = uniqueWordsMap.get(String(wordData.uniqueWordId));
+
+            if (!song || !uniqueWord) {
+                console.warn(`Missing references for word: ${wordData.text}`);
+                continue;
+            }
+
+            // Insert word with exact ID from backup using correct column names
+            await this.wordRepository.query(
+                'INSERT INTO word (id, text, "rowIndex", "paragraphIndex", "inRowIndex", "songId", "uniqueWordId") VALUES ($1, $2, $3, $4, $5, $6, $7)',
+                [
+                    wordData.id,
+                    wordData.text,
+                    wordData.rowIndex,
+                    wordData.paragraphIndex,
+                    wordData.inRowIndex,
+                    song.id,
+                    uniqueWord.id
+                ]
+            );
+        }
+
+        // Update word sequence
+        await this.wordRepository.query(`
+            SELECT setval('word_id_seq', COALESCE((SELECT MAX(id) FROM word), 1));
+        `);
+
+        // 4. Restore Groups
+        if (data.database.groups) {
+            console.log('Restoring groups...');
+            const groups = Array.isArray(data.database.groups) 
+                ? data.database.groups 
+                : [data.database.groups];
+
+            for (const groupData of groups) {
+                const uniqueWord = uniqueWordsMap.get(String(groupData.uniqueWordId));
                 if (!uniqueWord) {
-                    console.warn(`UniqueWord not found for word: ${wordData.text} with ID: ${uniqueWordId}`);
+                    console.warn(`UniqueWord not found for group: ${groupData.name}`);
                     continue;
                 }
 
-                const word = this.wordRepository.create({
-                    id: wordData.id,
-                    text: wordData.text,
-                    rowIndex: parseInt(wordData.rowIndex),
-                    paragraphIndex: parseInt(wordData.paragraphIndex),
-                    inRowIndex: parseInt(wordData.inRowIndex),
-                    song: savedSong,
+                const group = this.groupOfWordsRepository.create({
+                    id: groupData.id,
+                    groupId: groupData.groupId,
+                    name: groupData.name,
                     uniqueWord: uniqueWord
                 });
 
-                await this.wordRepository.save(word);
+                await this.groupOfWordsRepository.save(group);
             }
-        } catch (error) {
-            console.error('Error restoring song:', error);
-            console.error('Song data:', songData);
         }
-    }
 
-    console.log('Restore process completed');
+        // 5. Restore Expressions
+        if (data.database.expressions) {
+            console.log('Restoring expressions...');
+            const expressions = Array.isArray(data.database.expressions) 
+                ? data.database.expressions 
+                : [data.database.expressions];
+
+            for (const exprData of expressions) {
+                const expression = this.expressionRepository.create({
+                    id: exprData.id,
+                    text: exprData.text,
+                    uniqueWordIds: Array.isArray(exprData.uniqueWordIds) 
+                        ? exprData.uniqueWordIds 
+                        : [exprData.uniqueWordIds]
+                });
+
+                await this.expressionRepository.save(expression);
+            }
+        }
+
+        console.log('Restore process completed successfully');
+    } catch (error) {
+        console.error('Error during restore process:', error);
+        throw error;
+    }
   }
 
   async exportToXml(): Promise<string> {
